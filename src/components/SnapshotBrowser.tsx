@@ -3,7 +3,7 @@ import { useProjectStore } from "../store/useProjectStore";
 import type { ChapterDiff } from "../lib/supabase-service";
 
 export function SnapshotBrowser() {
-  const { snapshots, saveSnapshot, compareSnapshots, restoreSnapshot, progressStats } =
+  const { snapshots, saveSnapshot, compareSnapshots, restoreSnapshot } =
     useProjectStore();
 
   const [note, setNote] = useState("");
@@ -27,7 +27,7 @@ export function SnapshotBrowser() {
 
   const handleCompare = async (snapshotId: string, message: string) => {
     setComparing(true);
-    setDiffTitle(`Changes since: ${message}`);
+    setDiffTitle(message);
     try {
       const diffs = await compareSnapshots(snapshotId, "current");
       setDiffResult(diffs);
@@ -52,25 +52,7 @@ export function SnapshotBrowser() {
   };
 
   return (
-    <div className="snapshot-browser">
-      <h3>Snapshots & History</h3>
-
-      {/* Progress stats */}
-      <div className="snapshot-progress">
-        <div className="progress-stat">
-          <span className="progress-label">Today</span>
-          <span className="progress-value">+{progressStats.todayWords} words</span>
-        </div>
-        <div className="progress-stat">
-          <span className="progress-label">This week</span>
-          <span className="progress-value">+{progressStats.weekWords} words</span>
-        </div>
-        <div className="progress-stat">
-          <span className="progress-label">This month</span>
-          <span className="progress-value">+{progressStats.monthWords} words</span>
-        </div>
-      </div>
-
+    <div className="manage-card">
       {/* Create snapshot */}
       <div className="snapshot-create">
         <input
@@ -78,86 +60,107 @@ export function SnapshotBrowser() {
           placeholder="Snapshot note (optional)"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="snapshot-note-input"
+          className="form-input snapshot-note-input"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleSaveSnapshot();
+          }}
         />
-        <button onClick={handleSaveSnapshot} disabled={saving} className="snapshot-save-btn">
-          {saving ? "Saving..." : "Save Snapshot"}
+        <button
+          onClick={handleSaveSnapshot}
+          disabled={saving}
+          className="btn btn-primary btn-sm"
+        >
+          {saving ? "Saving\u2026" : "Save Snapshot"}
         </button>
       </div>
 
       {/* Snapshot list */}
-      <div className="snapshot-list">
-        {snapshots.length === 0 && (
-          <p className="snapshot-empty">No snapshots yet. Save one to start tracking versions.</p>
-        )}
-        {snapshots.map((snap) => (
-          <div key={snap.id} className="snapshot-item">
-            <div className="snapshot-item-info">
-              <span className="snapshot-message">{snap.message}</span>
-              <span className="snapshot-date">
-                {new Date(snap.date).toLocaleDateString()} {new Date(snap.date).toLocaleTimeString()}
-              </span>
+      {snapshots.length === 0 ? (
+        <p className="snapshot-empty">No snapshots yet. Save one to start tracking versions.</p>
+      ) : (
+        <div className="snapshot-list">
+          {snapshots.map((snap) => (
+            <div key={snap.id} className="snapshot-row">
+              <div className="snapshot-row-info">
+                <span className="snapshot-message">{snap.message}</span>
+                <span className="snapshot-date">
+                  {new Date(snap.date).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  {snap.wordCount > 0 && (
+                    <> &middot; {snap.wordCount.toLocaleString()} words</>
+                  )}
+                </span>
+              </div>
+              <div className="snapshot-row-actions">
+                <button
+                  className="btn btn-sm"
+                  onClick={() => handleCompare(snap.id, snap.message)}
+                  disabled={comparing}
+                >
+                  Compare
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => handleRestore(snap.id)}
+                  disabled={restoring}
+                >
+                  Restore
+                </button>
+              </div>
             </div>
-            <div className="snapshot-item-actions">
-              <button
-                className="snapshot-compare-btn"
-                onClick={() => handleCompare(snap.id, snap.message)}
-                disabled={comparing}
-              >
-                Compare
-              </button>
-              <button
-                className="snapshot-restore-btn"
-                onClick={() => handleRestore(snap.id)}
-                disabled={restoring}
-              >
-                Restore
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Diff viewer */}
       {diffResult && (
         <div className="snapshot-diff">
           <div className="snapshot-diff-header">
-            <h4>{diffTitle}</h4>
-            <button onClick={() => setDiffResult(null)} className="snapshot-diff-close">
+            <div>
+              <div className="manage-option-label">Changes since</div>
+              <div className="snapshot-diff-title">{diffTitle}</div>
+            </div>
+            <button onClick={() => setDiffResult(null)} className="btn btn-sm">
               Close
             </button>
           </div>
-          {diffResult.map((chDiff) => {
-            const wordDelta = chDiff.wordCountB - chDiff.wordCountA;
-            const hasChanges = chDiff.diff.some((seg) => seg.type !== "same");
-            if (!hasChanges) return null;
-            return (
-              <div key={chDiff.chapterId} className="snapshot-diff-chapter">
-                <h5>
-                  {chDiff.title}{" "}
-                  <span className={wordDelta >= 0 ? "diff-positive" : "diff-negative"}>
-                    ({wordDelta >= 0 ? "+" : ""}{wordDelta} words)
-                  </span>
-                </h5>
-                <div className="diff-content">
-                  {chDiff.diff.map((seg, i) => (
-                    <span
-                      key={i}
-                      className={
-                        seg.type === "added"
-                          ? "diff-added"
-                          : seg.type === "removed"
-                          ? "diff-removed"
-                          : ""
-                      }
-                    >
-                      {seg.value}
+          <div className="snapshot-diff-body">
+            {diffResult.map((chDiff) => {
+              const wordDelta = chDiff.wordCountB - chDiff.wordCountA;
+              const hasChanges = chDiff.diff.some((seg) => seg.type !== "same");
+              if (!hasChanges) return null;
+              return (
+                <div key={chDiff.chapterId} className="snapshot-diff-chapter">
+                  <div className="snapshot-diff-chapter-header">
+                    <span className="snapshot-diff-chapter-title">{chDiff.title}</span>
+                    <span className={wordDelta >= 0 ? "diff-positive" : "diff-negative"}>
+                      {wordDelta >= 0 ? "+" : ""}{wordDelta} words
                     </span>
-                  ))}
+                  </div>
+                  <div className="diff-content">
+                    {chDiff.diff.map((seg, i) => (
+                      <span
+                        key={i}
+                        className={
+                          seg.type === "added"
+                            ? "diff-added"
+                            : seg.type === "removed"
+                            ? "diff-removed"
+                            : ""
+                        }
+                      >
+                        {seg.value}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

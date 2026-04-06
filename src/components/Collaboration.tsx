@@ -18,6 +18,7 @@ export function Collaboration() {
   const [loading, setLoading] = useState(false);
 
   const isOwner = currentProjectRole === "owner";
+  const otherEditors = activeEditors.filter((e) => e.userId !== userId);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,94 +38,90 @@ export function Collaboration() {
   };
 
   return (
-    <div className="collaboration-panel">
-      <h3>Collaboration</h3>
-
-      {/* Active editors */}
-      {activeEditors.length > 0 && (
-        <div className="collab-section">
-          <h4>Currently Online</h4>
-          <ul className="collab-presence-list">
-            {activeEditors
-              .filter((e) => e.userId !== userId)
-              .map((editor) => (
-                <li key={editor.userId} className="collab-presence-item">
-                  <span className="collab-presence-dot" />
-                  <span>{editor.displayName || "Anonymous"}</span>
-                  <span className="collab-presence-tab">
-                    {editor.activeTab}
-                    {editor.activeChapterId ? " (editing)" : ""}
-                  </span>
-                </li>
-              ))}
-          </ul>
+    <div className="manage-card">
+      {/* Online presence */}
+      {otherEditors.length > 0 && (
+        <div className="collab-presence-bar">
+          {otherEditors.map((editor) => (
+            <div key={editor.userId} className="collab-presence-chip">
+              <span className="collab-presence-dot" />
+              <span className="collab-presence-name">{editor.displayName || "Anonymous"}</span>
+              <span className="collab-presence-where">
+                {editor.activeTab}{editor.activeChapterId ? " \u00b7 editing" : ""}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Members list */}
-      <div className="collab-section">
-        <h4>Project Members</h4>
-        <ul className="collab-members-list">
+      {/* Members table */}
+      <div className="collab-members">
+        <div className="collab-members-header">
+          <div className="manage-option-label">Members</div>
+          <span className="collab-member-count">{projectMembers.length}</span>
+        </div>
+        <div className="collab-members-list">
           {projectMembers.map((member) => (
-            <li key={member.id} className="collab-member-item">
-              <div className="collab-member-info">
-                <span className="collab-member-name">
-                  {member.displayName || member.email}
+            <div key={member.id} className="collab-member-row">
+              <div className="collab-member-identity">
+                <span className="collab-member-avatar">
+                  {(member.displayName || member.email).charAt(0).toUpperCase()}
                 </span>
-                <span className="collab-member-role">{member.role}</span>
+                <div className="collab-member-text">
+                  <span className="collab-member-name">
+                    {member.displayName || member.email}
+                  </span>
+                  {member.displayName && (
+                    <span className="collab-member-email">{member.email}</span>
+                  )}
+                </div>
               </div>
+              <span className="collab-role-badge" data-role={member.role}>
+                {member.role}
+              </span>
               {isOwner && member.userId !== userId && (
                 <button
                   className="collab-remove-btn"
                   onClick={() => removeProjectMember(member.userId)}
+                  title="Remove member"
                 >
-                  Remove
+                  &times;
                 </button>
               )}
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       </div>
 
-      {/* Invite form (owner only) */}
+      {/* Invite form */}
       {isOwner && (
-        <div className="collab-section">
-          <h4>Invite User</h4>
+        <div className="collab-invite">
+          <div className="manage-option-label">Invite</div>
           <form onSubmit={handleInvite} className="collab-invite-form">
             <input
               type="email"
               placeholder="user@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="collab-invite-input"
+              className="form-input collab-invite-input"
               required
             />
             <select
               value={role}
               onChange={(e) => setRole(e.target.value as "editor" | "viewer")}
-              className="collab-role-select"
+              className="form-input collab-role-select"
             >
-              <option value="viewer">Read-only (can comment)</option>
+              <option value="viewer">Viewer (comment only)</option>
               <option value="editor">Editor (cowriter)</option>
             </select>
-            <button type="submit" className="collab-invite-btn" disabled={loading}>
-              {loading ? "Inviting..." : "Invite"}
+            <button type="submit" className="btn btn-primary btn-sm" disabled={loading}>
+              {loading ? "Inviting\u2026" : "Invite"}
             </button>
           </form>
-          {error && <p className="collab-error">{error}</p>}
-          {success && <p className="collab-success">{success}</p>}
+          {error && <p className="collab-feedback collab-error">{error}</p>}
+          {success && <p className="collab-feedback collab-success">{success}</p>}
         </div>
       )}
-
-      {/* Role info */}
-      <div className="collab-section collab-info">
-        <h4>Permission Levels</h4>
-        <ul>
-          <li><strong>Owner:</strong> Full access, manage members</li>
-          <li><strong>Editor:</strong> Read and write all project data (cowriter)</li>
-          <li><strong>Viewer:</strong> Read-only access, can add comments</li>
-        </ul>
-      </div>
     </div>
   );
 }

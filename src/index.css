@@ -3573,6 +3573,7 @@ input[type="radio"]:focus-visible {
 }
 
 
+
 /* ============================================================
    Login Screen
    ============================================================ */
@@ -3583,84 +3584,97 @@ input[type="radio"]:focus-visible {
   justify-content: center;
   min-height: 100vh;
   background: var(--bg-primary);
-  font-family: "DM Sans", sans-serif;
+  background-image:
+    radial-gradient(ellipse at 30% 20%, rgba(184, 134, 11, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 70% 80%, rgba(139, 105, 20, 0.03) 0%, transparent 50%);
+  font-family: var(--font-ui);
 }
 
 .login-card {
   background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: 12px;
-  padding: 48px 40px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  padding: var(--space-3xl) var(--space-2xl);
   width: 100%;
-  max-width: 400px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  max-width: 380px;
+  box-shadow: var(--shadow-lg);
 }
 
 .login-title {
-  font-family: "Cormorant Garamond", serif;
-  font-size: 2rem;
+  font-family: var(--font-display);
+  font-size: 2.2rem;
   font-weight: 600;
   text-align: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
 .login-subtitle {
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.9rem;
-  margin-bottom: 32px;
+  font-size: 0.85rem;
+  margin-bottom: var(--space-xl);
 }
 
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-md);
 }
 
 .login-label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
+  gap: var(--space-xs);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .login-input {
   padding: 10px 12px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
   font-size: 0.95rem;
+  font-family: var(--font-ui);
   background: var(--bg-input);
   color: var(--text-primary);
+  transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 
 .login-input:focus {
   outline: none;
-  border-color: var(--accent-primary);
+  border-color: var(--border-focus);
   background: var(--bg-input-focus);
+  box-shadow: var(--shadow-glow);
 }
 
 .login-error {
-  color: var(--red);
-  font-size: 0.85rem;
+  color: #C0392B;
+  font-size: 0.82rem;
   margin: 0;
 }
 
 .login-button {
-  padding: 12px;
+  padding: 11px;
   border: none;
-  border-radius: 6px;
-  font-size: 0.95rem;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
   font-weight: 600;
+  font-family: var(--font-ui);
   cursor: pointer;
-  background: var(--accent-primary);
-  color: white;
-  margin-top: 8px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  margin-top: var(--space-sm);
+  transition: background var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 
 .login-button:hover {
   background: var(--accent-hover);
+  box-shadow: var(--shadow-md);
 }
 
 .login-button:disabled {
@@ -3669,265 +3683,489 @@ input[type="radio"]:focus-visible {
 }
 
 /* ============================================================
-   Collaboration Panel
+   Manage — Overview Banner
    ============================================================ */
 
-.collaboration-panel {
+.manage-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
   background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: 8px;
-  padding: 20px 24px;
-  margin-top: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg) var(--space-lg);
+  margin-bottom: var(--space-xl);
 }
 
-.collab-section {
-  margin-top: 16px;
-}
-
-.collab-section h4 {
-  font-size: 0.85rem;
+.manage-overview-name {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
   font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
+  color: var(--text-primary);
+  line-height: 1.2;
 }
 
-.collab-members-list, .collab-presence-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.collab-member-item, .collab-presence-item {
+.manage-overview-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-secondary);
-}
-
-.collab-member-info {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.collab-member-role {
-  font-size: 0.78rem;
+  gap: var(--space-sm);
+  font-size: 0.82rem;
   color: var(--text-muted);
-  background: var(--bg-tertiary);
-  padding: 2px 8px;
-  border-radius: 4px;
+  margin-top: 4px;
 }
 
-.collab-presence-dot {
-  width: 8px;
-  height: 8px;
+.manage-overview-sep {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
-  background: #22c55e;
+  background: var(--border);
   flex-shrink: 0;
 }
 
-.collab-presence-tab {
-  font-size: 0.78rem;
+.manage-overview-stats {
+  display: flex;
+  gap: var(--space-lg);
+  flex-shrink: 0;
+}
+
+.manage-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.manage-stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.manage-stat-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-muted);
-  margin-left: auto;
+}
+
+/* ============================================================
+   Manage — Section Labels
+   ============================================================ */
+
+.manage-section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-accent);
+  margin-bottom: var(--space-sm);
+  margin-top: var(--space-lg);
+  padding-left: 2px;
+}
+
+.manage-section-label:first-of-type {
+  margin-top: 0;
+}
+
+/* ============================================================
+   Manage — 3-column Grid
+   ============================================================ */
+
+.manage-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 900px) {
+  .manage-grid-3 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .manage-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================
+   Manage — Danger Zone (refined)
+   ============================================================ */
+
+.manage-danger-header {
+  margin-bottom: var(--space-sm);
+}
+
+.manage-danger-actions {
+  display: flex;
+  gap: var(--space-sm);
+  flex-direction: row;
+}
+
+/* ============================================================
+   Collaboration — Redesigned
+   ============================================================ */
+
+/* Presence bar */
+.collab-presence-bar {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-md);
+  margin-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.collab-presence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: 100px;
+  font-size: 0.78rem;
+}
+
+.collab-presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+}
+
+.collab-presence-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.collab-presence-where {
+  color: var(--text-muted);
+}
+
+/* Members list */
+.collab-members {
+  margin-bottom: var(--space-md);
+}
+
+.collab-members-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.collab-member-count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.collab-members-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.collab-member-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.collab-member-row:last-child {
+  border-bottom: none;
+}
+
+.collab-member-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+  min-width: 0;
+}
+
+.collab-member-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-muted);
+  color: var(--text-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.collab-member-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.collab-member-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collab-member-email {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collab-role-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 100px;
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.collab-role-badge[data-role="owner"] {
+  background: var(--accent-muted);
+  color: var(--text-accent);
+}
+
+.collab-role-badge[data-role="editor"] {
+  background: rgba(34, 139, 230, 0.1);
+  color: #1971c2;
+}
+
+.dark .collab-role-badge[data-role="editor"] {
+  background: rgba(34, 139, 230, 0.15);
+  color: #74c0fc;
 }
 
 .collab-remove-btn {
-  font-size: 0.78rem;
-  color: var(--red);
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
   background: none;
   border: none;
   cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration) var(--ease), background var(--duration) var(--ease);
+}
+
+.collab-remove-btn:hover {
+  color: #C0392B;
+  background: rgba(192, 57, 43, 0.08);
+}
+
+/* Invite section */
+.collab-invite {
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-light);
+}
+
+.collab-invite .manage-option-label {
+  margin-bottom: var(--space-sm);
 }
 
 .collab-invite-form {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: stretch;
 }
 
 .collab-invite-input {
   flex: 1;
-  min-width: 180px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: var(--bg-input);
+  min-width: 0;
 }
 
 .collab-role-select {
-  padding: 8px 10px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: var(--bg-input);
+  width: auto;
+  min-width: 140px;
 }
 
-.collab-invite-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  background: var(--accent-primary);
-  color: white;
+.collab-feedback {
+  font-size: 0.78rem;
+  margin: var(--space-xs) 0 0;
 }
 
-.collab-error { color: var(--red); font-size: 0.85rem; margin-top: 4px; }
-.collab-success { color: #22c55e; font-size: 0.85rem; margin-top: 4px; }
-
-.collab-info ul {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  padding-left: 20px;
-  margin: 0;
+.collab-error {
+  color: #C0392B;
 }
 
-.collab-info li {
-  margin-bottom: 4px;
+.collab-success {
+  color: #2b8a3e;
 }
 
 /* ============================================================
-   Snapshot Browser
+   Snapshot Browser — Redesigned
    ============================================================ */
-
-.snapshot-browser {
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: 8px;
-  padding: 20px 24px;
-  margin-top: 16px;
-}
-
-.snapshot-progress {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 16px;
-}
-
-.progress-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.progress-label {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-
-.progress-value {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
 
 .snapshot-create {
   display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
 
 .snapshot-note-input {
   flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: var(--bg-input);
-}
-
-.snapshot-save-btn {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  background: var(--accent-primary);
-  color: white;
+  min-width: 0;
 }
 
 .snapshot-empty {
   color: var(--text-muted);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  font-style: italic;
 }
 
-.snapshot-item {
+.snapshot-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.snapshot-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-secondary);
+  gap: var(--space-md);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.snapshot-row:last-child {
+  border-bottom: none;
+}
+
+.snapshot-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .snapshot-message {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .snapshot-date {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
-  display: block;
+  font-family: var(--font-mono);
 }
 
-.snapshot-item-actions {
+.snapshot-row-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.snapshot-compare-btn, .snapshot-restore-btn {
-  font-size: 0.78rem;
-  padding: 4px 10px;
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  background: var(--bg-card);
-  cursor: pointer;
-}
-
+/* Diff viewer */
 .snapshot-diff {
-  margin-top: 16px;
-  border: 1px solid var(--border-primary);
-  border-radius: 8px;
-  padding: 16px;
-  background: var(--bg-secondary);
-  max-height: 400px;
-  overflow-y: auto;
+  margin-top: var(--space-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 
 .snapshot-diff-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-light);
 }
 
-.snapshot-diff-close {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--text-muted);
+.snapshot-diff-title {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.snapshot-diff-body {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: var(--space-md) var(--space-lg);
 }
 
 .snapshot-diff-chapter {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-lg);
+}
+
+.snapshot-diff-chapter:last-child {
+  margin-bottom: 0;
+}
+
+.snapshot-diff-chapter-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px dashed var(--border-light);
+}
+
+.snapshot-diff-chapter-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .diff-content {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.8rem;
-  line-height: 1.6;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
   white-space: pre-wrap;
+  color: var(--text-secondary);
 }
 
-.diff-added { background: rgba(34, 197, 94, 0.15); }
-.diff-removed { background: rgba(239, 68, 68, 0.15); text-decoration: line-through; }
-.diff-positive { color: #22c55e; }
-.diff-negative { color: #ef4444; }
+.diff-added {
+  background: rgba(43, 138, 62, 0.1);
+  border-radius: 2px;
+  padding: 0 1px;
+}
 
+.diff-removed {
+  background: rgba(192, 57, 43, 0.1);
+  text-decoration: line-through;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.diff-positive {
+  color: #2b8a3e;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.diff-negative {
+  color: #C0392B;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}

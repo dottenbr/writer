@@ -38,6 +38,8 @@ export function Manage() {
   const updateExportConfig = useProjectStore((s) => s.updateExportConfig);
   const signOut = useProjectStore((s) => s.signOut);
   const userEmail = useProjectStore((s) => s.userEmail);
+  const progressStats = useProjectStore((s) => s.progressStats);
+  const totalWordCount = useProjectStore((s) => s.totalWordCount());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
@@ -89,15 +91,47 @@ export function Manage() {
         ? "PDF"
         : "DOCX";
 
+  const targetWords = project?.brief.targetWordCount ?? 80000;
+  const progressPct = targetWords > 0 ? Math.min(100, Math.round((totalWordCount / targetWords) * 100)) : 0;
+
   return (
     <div className="content">
       <div className="content-wide">
         <div className="page-title">Manage</div>
 
-        {/* Export — full-width top card */}
+        {/* ─── Project overview banner ─── */}
+        <div className="manage-overview">
+          <div className="manage-overview-left">
+            <div className="manage-overview-name">{project?.name || "Untitled"}</div>
+            <div className="manage-overview-meta">
+              <span>{project?.chapters.length ?? 0} sections</span>
+              <span className="manage-overview-sep" />
+              <span>{totalWordCount.toLocaleString()} words</span>
+              <span className="manage-overview-sep" />
+              <span>{progressPct}% of {targetWords.toLocaleString()} target</span>
+            </div>
+          </div>
+          <div className="manage-overview-stats">
+            <div className="manage-stat">
+              <span className="manage-stat-value">+{progressStats.todayWords}</span>
+              <span className="manage-stat-label">today</span>
+            </div>
+            <div className="manage-stat">
+              <span className="manage-stat-value">+{progressStats.weekWords}</span>
+              <span className="manage-stat-label">this week</span>
+            </div>
+            <div className="manage-stat">
+              <span className="manage-stat-value">+{progressStats.monthWords}</span>
+              <span className="manage-stat-label">this month</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── Export section ─── */}
+        <div className="manage-section-label">Export</div>
         <div className="manage-export-card">
           <div className="manage-export-header">
-            <div className="manage-card-title">Export Manuscript</div>
+            <div className="manage-card-title">Manuscript Export</div>
             <div className="manage-preset-row">
               <button
                 className={`btn btn-sm ${exportConfig.preset === "manuscript" ? "btn-primary" : ""}`}
@@ -239,7 +273,7 @@ export function Manage() {
                   checked={exportConfig.paragraphStyle === "indent"}
                   onChange={() => updateExportConfig({ paragraphStyle: "indent" as ParagraphStyle, preset: "custom" })}
                 />
-                First-line indent (manuscript)
+                First-line indent
               </label>
               <label className="manage-check">
                 <input
@@ -248,7 +282,7 @@ export function Manage() {
                   checked={exportConfig.paragraphStyle === "spacing"}
                   onChange={() => updateExportConfig({ paragraphStyle: "spacing" as ParagraphStyle, preset: "custom" })}
                 />
-                Paragraph spacing (modern)
+                Paragraph spacing
               </label>
             </div>
 
@@ -261,7 +295,7 @@ export function Manage() {
                   checked={exportConfig.pageFormat === "a4"}
                   onChange={() => updateExportConfig({ pageFormat: "a4", preset: "custom" })}
                 />
-                A4 (210 x 297 mm)
+                A4
               </label>
               <label className="manage-check">
                 <input
@@ -270,7 +304,7 @@ export function Manage() {
                   checked={exportConfig.pageFormat === "letter"}
                   onChange={() => updateExportConfig({ pageFormat: "letter", preset: "custom" })}
                 />
-                US Letter (8.5 x 11 in)
+                US Letter
               </label>
             </div>
           </div>
@@ -300,8 +334,9 @@ export function Manage() {
           </div>
         </div>
 
-        {/* Grid of smaller cards */}
-        <div className="manage-grid">
+        {/* ─── Workspace section ─── */}
+        <div className="manage-section-label">Workspace</div>
+        <div className="manage-grid manage-grid-3">
           <div className="manage-card">
             <div className="manage-card-title">Project Files</div>
             <div className="manage-card-actions">
@@ -323,7 +358,7 @@ export function Manage() {
           </div>
 
           <div className="manage-card">
-            <div className="manage-card-title">Settings</div>
+            <div className="manage-card-title">Preferences</div>
             <div className="manage-card-actions">
               <button className="btn" onClick={() => setShowApiSettings(true)}>
                 Configure AI / LLM
@@ -349,36 +384,32 @@ export function Manage() {
           </div>
 
           <div className="manage-card">
-            <div className="manage-card-title">Project Info</div>
+            <div className="manage-card-title">Account</div>
             <div className="manage-info-grid">
               <div className="manage-info-row">
-                <span className="manage-info-label">Name</span>
-                <span className="manage-info-value">{project?.name || "\u2014"}</span>
-              </div>
-              <div className="manage-info-row">
-                <span className="manage-info-label">Sections</span>
-                <span className="manage-info-value">{project?.chapters.length ?? 0}</span>
-              </div>
-              <div className="manage-info-row">
-                <span className="manage-info-label">Signed in as</span>
+                <span className="manage-info-label">Email</span>
                 <span className="manage-info-value">{userEmail || "\u2014"}</span>
               </div>
             </div>
-            <button className="btn" style={{ marginTop: 8 }} onClick={() => void signOut()}>
+            <button className="btn" style={{ marginTop: 12 }} onClick={() => void signOut()}>
               Sign Out
             </button>
           </div>
         </div>
 
-        {/* Collaboration */}
+        {/* ─── Collaboration section ─── */}
+        <div className="manage-section-label">Collaboration</div>
         <Collaboration />
 
-        {/* Snapshots & History */}
+        {/* ─── History section ─── */}
+        <div className="manage-section-label">History</div>
         <SnapshotBrowser />
 
-        {/* Danger zone */}
+        {/* ─── Danger zone ─── */}
         <div className="manage-danger">
-          <div className="manage-card-title manage-danger-title">Danger Zone</div>
+          <div className="manage-danger-header">
+            <div className="manage-card-title manage-danger-title">Danger Zone</div>
+          </div>
           {!confirmDelete ? (
             <button
               className="btn btn-danger"
@@ -392,7 +423,7 @@ export function Manage() {
               <p>
                 Permanently delete <strong>{project?.name}</strong>? This cannot be undone.
               </p>
-              <div className="manage-card-actions" style={{ flexDirection: "row" }}>
+              <div className="manage-danger-actions">
                 <button
                   className="btn btn-danger"
                   onClick={() => {

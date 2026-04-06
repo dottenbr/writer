@@ -1,4 +1,4 @@
-import type { LlmSettings } from "./fs-service";
+import type { LlmSettings } from "./local-config";
 
 type LlmProvider = "anthropic" | "openai";
 const REQUEST_TIMEOUT_MS = 20000;

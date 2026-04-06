@@ -62,7 +62,7 @@ function EntryChevron({ open }: { open: boolean }) {
   );
 }
 
-function CharacterEntry({ char, focused = false }: { char: Character; focused?: boolean }) {
+function CharacterEntry({ char, focused = false, canEdit }: { char: Character; focused?: boolean; canEdit: boolean }) {
   const updateCharacter = useProjectStore((s) => s.updateCharacter);
   const deleteCharacter = useProjectStore((s) => s.deleteCharacter);
   const allCharacters = useProjectStore((s) => s.currentProject()?.bible.characters ?? []);
@@ -195,7 +195,7 @@ function CharacterEntry({ char, focused = false }: { char: Character; focused?: 
         <EntryChevron open={open} />
       </div>
       {open && (
-        <div className="bible-entry-body fade-enter">
+        <fieldset className="bible-entry-body fade-enter" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
           <div className="form-label" style={{ marginBottom: "0.5rem" }}>
             Identity
           </div>
@@ -516,13 +516,13 @@ function CharacterEntry({ char, focused = false }: { char: Character; focused?: 
           >
             Delete Character
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );
 }
 
-function ThreadEntry({ thread, focused = false }: { thread: Thread; focused?: boolean }) {
+function ThreadEntry({ thread, focused = false, canEdit }: { thread: Thread; focused?: boolean; canEdit: boolean }) {
   const updateThread = useProjectStore((s) => s.updateThread);
   const deleteThread = useProjectStore((s) => s.deleteThread);
   const [open, setOpen] = useState(false);
@@ -556,7 +556,7 @@ function ThreadEntry({ thread, focused = false }: { thread: Thread; focused?: bo
         <EntryChevron open={open} />
       </div>
       {open && (
-        <div className="bible-entry-body fade-enter">
+        <fieldset className="bible-entry-body fade-enter" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
           <div className="card-grid card-grid-2">
             <div className="form-group">
               <label className="form-label">Name</label>
@@ -684,13 +684,13 @@ function ThreadEntry({ thread, focused = false }: { thread: Thread; focused?: bo
           <button className="btn btn-danger btn-sm" onClick={() => deleteThread(thread.id)}>
             Delete Thread
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );
 }
 
-function LocationEntry({ location, focused = false }: { location: Location; focused?: boolean }) {
+function LocationEntry({ location, focused = false, canEdit }: { location: Location; focused?: boolean; canEdit: boolean }) {
   const updateLocation = useProjectStore((s) => s.updateLocation);
   const deleteLocation = useProjectStore((s) => s.deleteLocation);
   const [open, setOpen] = useState(false);
@@ -723,7 +723,7 @@ function LocationEntry({ location, focused = false }: { location: Location; focu
         <EntryChevron open={open} />
       </div>
       {open && (
-        <div className="bible-entry-body fade-enter">
+        <fieldset className="bible-entry-body fade-enter" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
           <div className="form-group">
             <label className="form-label">Name</label>
             <input
@@ -841,13 +841,13 @@ function LocationEntry({ location, focused = false }: { location: Location; focu
           <button className="btn btn-danger btn-sm" onClick={() => deleteLocation(location.id)}>
             Delete Location
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );
 }
 
-function CodexEntryComponent({ entry, focused = false }: { entry: CodexEntry; focused?: boolean }) {
+function CodexEntryComponent({ entry, focused = false, canEdit }: { entry: CodexEntry; focused?: boolean; canEdit: boolean }) {
   const updateCodexEntry = useProjectStore((s) => s.updateCodexEntry);
   const deleteCodexEntry = useProjectStore((s) => s.deleteCodexEntry);
   const [open, setOpen] = useState(false);
@@ -881,7 +881,7 @@ function CodexEntryComponent({ entry, focused = false }: { entry: CodexEntry; fo
         <EntryChevron open={open} />
       </div>
       {open && (
-        <div className="bible-entry-body fade-enter">
+        <fieldset className="bible-entry-body fade-enter" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
           <div className="card-grid card-grid-2">
             <div className="form-group">
               <label className="form-label">Name</label>
@@ -986,7 +986,7 @@ function CodexEntryComponent({ entry, focused = false }: { entry: CodexEntry; fo
           <button className="btn btn-danger btn-sm" onClick={() => deleteCodexEntry(entry.id)}>
             Delete Entry
           </button>
-        </div>
+        </fieldset>
       )}
     </div>
   );
@@ -1001,6 +1001,7 @@ const SECTIONS: { id: BibleSection; label: string; sublabel: string }[] = [
 
 export function Bible() {
   const project = useProjectStore((s) => s.currentProject());
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const section = useProjectStore((s) => s.activeBibleSection);
   const setSection = useProjectStore((s) => s.setActiveBibleSection);
   const focusedBibleEntryId = useProjectStore((s) => s.focusedBibleEntryId);
@@ -1014,6 +1015,7 @@ export function Bible() {
 
   if (!project) return null;
   const { bible } = project;
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
 
   const addActions: Record<BibleSection, () => void> = {
     characters: addCharacter,
@@ -1081,7 +1083,9 @@ export function Bible() {
             <div className="flex-row gap-sm">
               <button
                 className="btn btn-sm"
+                disabled={!canEdit}
                 onClick={async () => {
+                  if (!canEdit) return;
                   const project = useProjectStore.getState().currentProject();
                   if (!project || project.chapters.length === 0) return;
                   const sorted = [...project.chapters].sort((a, b) => a.number - b.number);
@@ -1098,11 +1102,16 @@ export function Bible() {
               >
                 Refresh Bible
               </button>
-              <button className="btn btn-primary" onClick={addActions[section]}>
+              <button className="btn btn-primary" onClick={addActions[section]} disabled={!canEdit}>
                 + Add {section === "codex" ? "Entry" : SECTIONS.find((s) => s.id === section)?.label.slice(0, -1)}
               </button>
             </div>
           </div>
+          {!canEdit && (
+            <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+              View-only mode. You can inspect the bible, but only editors can change entries.
+            </div>
+          )}
 
           {section === "characters" &&
             (bible.characters.length === 0 ? (
@@ -1118,6 +1127,7 @@ export function Bible() {
                   key={c.id}
                   char={c}
                   focused={section === "characters" && focusedBibleEntryId === c.id}
+                  canEdit={canEdit}
                 />
               ))
             ))}
@@ -1136,6 +1146,7 @@ export function Bible() {
                   key={t.id}
                   thread={t}
                   focused={section === "threads" && focusedBibleEntryId === t.id}
+                  canEdit={canEdit}
                 />
               ))
             ))}
@@ -1154,6 +1165,7 @@ export function Bible() {
                   key={l.id}
                   location={l}
                   focused={section === "locations" && focusedBibleEntryId === l.id}
+                  canEdit={canEdit}
                 />
               ))
             ))}
@@ -1172,6 +1184,7 @@ export function Bible() {
                   key={e.id}
                   entry={e}
                   focused={section === "codex" && focusedBibleEntryId === e.id}
+                  canEdit={canEdit}
                 />
               ))
             ))}

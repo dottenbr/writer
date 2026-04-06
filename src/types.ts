@@ -121,6 +121,8 @@ export function deriveChapterNumbers(chapters: Chapter[]): Map<string, number> {
 export interface Chapter {
   id: string;
   number: number;
+  version?: number;
+  updatedAt?: string;
   sectionType: SectionType;
   title: string;
   act: string | null;
@@ -350,6 +352,8 @@ export function createDefaultChapter(number: number, sectionType: SectionType = 
   return {
     id: crypto.randomUUID(),
     number,
+    version: 1,
+    updatedAt: new Date().toISOString(),
     sectionType,
     title: "",
     act: null,

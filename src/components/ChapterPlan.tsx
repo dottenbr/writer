@@ -25,10 +25,12 @@ function InlineScene({
   scene,
   index,
   chapterId,
+  canEdit,
 }: {
   scene: Scene;
   index: number;
   chapterId: string;
+  canEdit: boolean;
 }) {
   const updateScene = useProjectStore((s) => s.updateScene);
   const deleteScene = useProjectStore((s) => s.deleteScene);
@@ -43,6 +45,7 @@ function InlineScene({
           value={scene.title}
           onChange={(e) => updateScene(chapterId, scene.id, { title: e.target.value })}
           placeholder="Scene title..."
+          readOnly={!canEdit}
         />
         <div className="plan-scene-pills">
           {scene.pov && <span className="plan-scene-pill">{scene.pov}</span>}
@@ -67,12 +70,13 @@ function InlineScene({
           className="plan-scene-delete"
           onClick={() => deleteScene(chapterId, scene.id)}
           title="Remove scene"
+          disabled={!canEdit}
         >
           &times;
         </button>
       </div>
       {showDetail && (
-        <div className="plan-scene-detail">
+        <fieldset className="plan-scene-detail" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
           <textarea
             className="plan-scene-summary"
             value={scene.summary}
@@ -94,7 +98,7 @@ function InlineScene({
               placeholder="Location"
             />
           </div>
-        </div>
+        </fieldset>
       )}
     </div>
   );
@@ -109,7 +113,7 @@ function useAutoResize() {
   return autoResize;
 }
 
-function ExpandedChapter({ chapter }: { chapter: Chapter }) {
+function ExpandedChapter({ chapter, canEdit }: { chapter: Chapter; canEdit: boolean }) {
   const updateChapter = useProjectStore((s) => s.updateChapter);
   const deleteChapter = useProjectStore((s) => s.deleteChapter);
   const addScene = useProjectStore((s) => s.addScene);
@@ -123,7 +127,7 @@ function ExpandedChapter({ chapter }: { chapter: Chapter }) {
   }, [chapter.summary, chapter.notes, autoResize]);
 
   return (
-    <div className="plan-chapter-expanded">
+    <fieldset className="plan-chapter-expanded" disabled={!canEdit} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
       {/* Section Type */}
       <div className="plan-expanded-section">
         <div className="plan-section-label">Section Type</div>
@@ -163,6 +167,7 @@ function ExpandedChapter({ chapter }: { chapter: Chapter }) {
           <button
             className="plan-add-scene-btn"
             onClick={() => addScene(chapter.id)}
+            disabled={!canEdit}
           >
             +
           </button>
@@ -171,6 +176,7 @@ function ExpandedChapter({ chapter }: { chapter: Chapter }) {
           <button
             className="plan-empty-scenes"
             onClick={() => addScene(chapter.id)}
+            disabled={!canEdit}
           >
             Add first scene...
           </button>
@@ -182,6 +188,7 @@ function ExpandedChapter({ chapter }: { chapter: Chapter }) {
                 scene={scene}
                 index={i}
                 chapterId={chapter.id}
+                canEdit={canEdit}
               />
             ))}
           </div>
@@ -216,11 +223,12 @@ function ExpandedChapter({ chapter }: { chapter: Chapter }) {
         <button
           className="plan-delete-chapter"
           onClick={() => deleteChapter(chapter.id)}
+          disabled={!canEdit}
         >
           Delete chapter
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -229,11 +237,13 @@ function SortableChapterCard({
   chapterNumber,
   isExpanded,
   onToggle,
+  canEdit,
 }: {
   chapter: Chapter;
   chapterNumber: number | null;
   isExpanded: boolean;
   onToggle: () => void;
+  canEdit: boolean;
 }) {
   const updateChapter = useProjectStore((s) => s.updateChapter);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: chapter.id });
@@ -249,6 +259,7 @@ function SortableChapterCard({
 
   const handleTitleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!canEdit) return;
     setEditingTitle(true);
   };
 
@@ -264,6 +275,7 @@ function SortableChapterCard({
 
   const cycleStatus = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!canEdit) return;
     const idx = STATUS_OPTIONS.findIndex((s) => s.value === chapter.status);
     const next = STATUS_OPTIONS[(idx + 1) % STATUS_OPTIONS.length];
     updateChapter(chapter.id, { status: next.value });
@@ -280,9 +292,10 @@ function SortableChapterCard({
         <button
           className="plan-chapter-handle"
           onClick={(e) => e.stopPropagation()}
-          {...attributes}
-          {...listeners}
+          {...(canEdit ? attributes : {})}
+          {...(canEdit ? listeners : {})}
           title="Drag to reorder"
+          disabled={!canEdit}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <circle cx="5.5" cy="3.5" r="1.2" />
@@ -306,6 +319,7 @@ function SortableChapterCard({
             onKeyDown={handleTitleKeyDown}
             onClick={(e) => e.stopPropagation()}
             placeholder="Untitled"
+            readOnly={!canEdit}
           />
         ) : (
           <span
@@ -331,6 +345,7 @@ function SortableChapterCard({
             className={`plan-status-pill status-${chapter.status}`}
             onClick={cycleStatus}
             title="Click to cycle status"
+            disabled={!canEdit}
           >
             {chapter.status}
           </button>
@@ -344,7 +359,7 @@ function SortableChapterCard({
       </div>
 
       {/* Expanded body — inline editing */}
-      {isExpanded && <ExpandedChapter chapter={chapter} />}
+      {isExpanded && <ExpandedChapter chapter={chapter} canEdit={canEdit} />}
     </div>
   );
 }
@@ -375,12 +390,14 @@ function ActHeader({
   chapterCount,
   onUpdate,
   onDelete,
+  canEdit,
 }: {
   act: { id: string; label: string };
   actNumber: number;
   chapterCount: number;
   onUpdate: (label: string) => void;
   onDelete: () => void;
+  canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -407,11 +424,14 @@ function ActHeader({
               if (e.key === "Enter" || e.key === "Escape") setEditing(false);
             }}
             placeholder="Act name..."
+            readOnly={!canEdit}
           />
         ) : (
           <span
             className="plan-act-label-text"
-            onDoubleClick={() => setEditing(true)}
+            onDoubleClick={() => {
+              if (canEdit) setEditing(true);
+            }}
             title="Double-click to rename"
           >
             {act.label || "Untitled act"}
@@ -424,6 +444,7 @@ function ActHeader({
           className="plan-act-delete"
           onClick={onDelete}
           title="Remove act"
+          disabled={!canEdit}
         >
           &times;
         </button>
@@ -434,6 +455,7 @@ function ActHeader({
 
 export function ChapterPlan() {
   const project = useProjectStore((s) => s.currentProject());
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const addChapter = useProjectStore((s) => s.addChapter);
   const addSection = useProjectStore((s) => s.addSection);
   const addAct = useProjectStore((s) => s.addAct);
@@ -454,6 +476,7 @@ export function ChapterPlan() {
   }, []);
 
   if (!project) return null;
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const orderedChapters = useMemo(
@@ -492,6 +515,7 @@ export function ChapterPlan() {
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!canEdit) return;
     if (!over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
@@ -558,14 +582,19 @@ export function ChapterPlan() {
               {totalWords > 0 && <>&ensp;&middot;&ensp;{totalWords.toLocaleString()} words</>}
             </span>
           </div>
+          {!canEdit && (
+            <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+              View-only mode. Planning changes are disabled for this role.
+            </div>
+          )}
           <div className="flex-row gap-sm" style={{ position: "relative" }}>
-            <button className="btn" onClick={() => addAct()}>
+            <button className="btn" onClick={() => addAct()} disabled={!canEdit}>
               + Act
             </button>
-            <button className="btn btn-primary" onClick={addChapter}>
+            <button className="btn btn-primary" onClick={addChapter} disabled={!canEdit}>
               + Chapter
             </button>
-            <button className="btn" onClick={() => setShowAddMenu(!showAddMenu)}>
+            <button className="btn" onClick={() => setShowAddMenu(!showAddMenu)} disabled={!canEdit}>
               + Section ▾
             </button>
             {showAddMenu && (
@@ -596,7 +625,7 @@ export function ChapterPlan() {
               <br />
               Each chapter can contain scenes, summaries, and notes.
             </div>
-            <button className="btn btn-primary" onClick={addChapter}>
+            <button className="btn btn-primary" onClick={addChapter} disabled={!canEdit}>
               + Add First Chapter
             </button>
           </div>
@@ -614,6 +643,7 @@ export function ChapterPlan() {
                       chapterCount={chapterIds.length}
                       onUpdate={(label) => updateAct(act.id, label)}
                       onDelete={() => deleteAct(act.id)}
+                      canEdit={canEdit}
                     />
                     <ActDropZone containerId={act.id} chapterIds={chapterIds}>
                       {chapters.map((chapter) => (
@@ -623,6 +653,7 @@ export function ChapterPlan() {
                           chapterNumber={chapterNumberMap.get(chapter.id) ?? null}
                           isExpanded={expandedIds.has(chapter.id)}
                           onToggle={() => toggleExpanded(chapter.id)}
+                          canEdit={canEdit}
                         />
                       ))}
                       {chapters.length === 0 && (
@@ -652,6 +683,7 @@ export function ChapterPlan() {
                       chapterNumber={chapterNumberMap.get(chapter.id) ?? null}
                       isExpanded={expandedIds.has(chapter.id)}
                       onToggle={() => toggleExpanded(chapter.id)}
+                      canEdit={canEdit}
                     />
                   ))}
                   {(chaptersByContainer.get(UNASSIGNED_ACT_ID) ?? []).length === 0 && (

@@ -5,6 +5,8 @@ import type { ChapterDiff } from "../lib/supabase-service";
 export function SnapshotBrowser() {
   const { snapshots, saveSnapshot, compareSnapshots, restoreSnapshot } =
     useProjectStore();
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
 
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -67,7 +69,7 @@ export function SnapshotBrowser() {
         />
         <button
           onClick={handleSaveSnapshot}
-          disabled={saving}
+          disabled={saving || !canEdit}
           className="btn btn-primary btn-sm"
         >
           {saving ? "Saving\u2026" : "Save Snapshot"}
@@ -106,7 +108,7 @@ export function SnapshotBrowser() {
                 <button
                   className="btn btn-sm"
                   onClick={() => handleRestore(snap.id)}
-                  disabled={restoring}
+                  disabled={restoring || !canEdit}
                 >
                   Restore
                 </button>

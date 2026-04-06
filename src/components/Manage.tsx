@@ -40,6 +40,7 @@ export function Manage() {
   const userEmail = useProjectStore((s) => s.userEmail);
   const progressStats = useProjectStore((s) => s.progressStats);
   const totalWordCount = useProjectStore((s) => s.totalWordCount());
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
@@ -93,11 +94,18 @@ export function Manage() {
 
   const targetWords = project?.brief.targetWordCount ?? 80000;
   const progressPct = targetWords > 0 ? Math.min(100, Math.round((totalWordCount / targetWords) * 100)) : 0;
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const isOwner = currentProjectRole === "owner";
 
   return (
     <div className="content">
       <div className="content-wide">
         <div className="page-title">Manage</div>
+        {!canEdit && (
+          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+            View-only mode. Export and review are available, but project settings and restore actions are restricted.
+          </div>
+        )}
 
         {/* ─── Project overview banner ─── */}
         <div className="manage-overview">
@@ -136,12 +144,14 @@ export function Manage() {
               <button
                 className={`btn btn-sm ${exportConfig.preset === "manuscript" ? "btn-primary" : ""}`}
                 onClick={() => applyPreset("manuscript")}
+                disabled={!canEdit}
               >
                 Standard Manuscript
               </button>
               <button
                 className={`btn btn-sm ${exportConfig.preset === "custom" ? "btn-primary" : ""}`}
                 onClick={() => applyPreset("custom")}
+                disabled={!canEdit}
               >
                 Custom
               </button>
@@ -155,6 +165,7 @@ export function Manage() {
                 <input
                   type="checkbox"
                   checked={exportConfig.actHeadings}
+                  disabled={!canEdit}
                   onChange={(e) => updateExportConfig({ actHeadings: e.target.checked, preset: "custom" })}
                 />
                 Act headings
@@ -163,6 +174,7 @@ export function Manage() {
                 <input
                   type="checkbox"
                   checked={exportConfig.chapterHeadings}
+                  disabled={!canEdit}
                   onChange={(e) => updateExportConfig({ chapterHeadings: e.target.checked, preset: "custom" })}
                 />
                 Chapter headings
@@ -171,6 +183,7 @@ export function Manage() {
                 <input
                   type="checkbox"
                   checked={exportConfig.sceneHeadings}
+                  disabled={!canEdit}
                   onChange={(e) => updateExportConfig({ sceneHeadings: e.target.checked, preset: "custom" })}
                 />
                 Scene headings
@@ -183,6 +196,7 @@ export function Manage() {
                 type="text"
                 className="form-input"
                 value={exportConfig.sceneSeparator}
+                disabled={!canEdit}
                 onChange={(e) => updateExportConfig({ sceneSeparator: e.target.value, preset: "custom" })}
                 style={{ maxWidth: 120, textAlign: "center" }}
               />
@@ -195,6 +209,7 @@ export function Manage() {
                 <input
                   type="checkbox"
                   checked={exportConfig.titlePage}
+                  disabled={!canEdit}
                   onChange={(e) => updateExportConfig({ titlePage: e.target.checked, preset: "custom" })}
                 />
                 Include title page
@@ -206,6 +221,7 @@ export function Manage() {
                     className="form-input"
                     placeholder="Author name"
                     value={exportConfig.author}
+                    disabled={!canEdit}
                     onChange={(e) => updateExportConfig({ author: e.target.value })}
                     style={{ marginTop: 4, maxWidth: 220 }}
                   />
@@ -213,6 +229,7 @@ export function Manage() {
                     <input
                       type="checkbox"
                       checked={exportConfig.wordCountOnTitle}
+                      disabled={!canEdit}
                       onChange={(e) => updateExportConfig({ wordCountOnTitle: e.target.checked, preset: "custom" })}
                     />
                     Show word count
@@ -228,6 +245,7 @@ export function Manage() {
               <select
                 className="form-input"
                 value={exportConfig.fontFamily}
+                disabled={!canEdit}
                 onChange={(e) => updateExportConfig({ fontFamily: e.target.value, preset: "custom" })}
                 style={{ maxWidth: 180 }}
               >
@@ -239,6 +257,7 @@ export function Manage() {
                 <select
                   className="form-input"
                   value={exportConfig.fontSize}
+                  disabled={!canEdit}
                   onChange={(e) => updateExportConfig({ fontSize: Number(e.target.value), preset: "custom" })}
                   style={{ maxWidth: 80 }}
                 >
@@ -257,6 +276,7 @@ export function Manage() {
                     type="radio"
                     name="lineSpacing"
                     checked={exportConfig.lineSpacing === opt.value}
+                    disabled={!canEdit}
                     onChange={() => updateExportConfig({ lineSpacing: opt.value, preset: "custom" })}
                   />
                   {opt.label}
@@ -271,6 +291,7 @@ export function Manage() {
                   type="radio"
                   name="paragraphStyle"
                   checked={exportConfig.paragraphStyle === "indent"}
+                  disabled={!canEdit}
                   onChange={() => updateExportConfig({ paragraphStyle: "indent" as ParagraphStyle, preset: "custom" })}
                 />
                 First-line indent
@@ -280,6 +301,7 @@ export function Manage() {
                   type="radio"
                   name="paragraphStyle"
                   checked={exportConfig.paragraphStyle === "spacing"}
+                  disabled={!canEdit}
                   onChange={() => updateExportConfig({ paragraphStyle: "spacing" as ParagraphStyle, preset: "custom" })}
                 />
                 Paragraph spacing
@@ -293,6 +315,7 @@ export function Manage() {
                   type="radio"
                   name="pageFormat"
                   checked={exportConfig.pageFormat === "a4"}
+                  disabled={!canEdit}
                   onChange={() => updateExportConfig({ pageFormat: "a4", preset: "custom" })}
                 />
                 A4
@@ -302,6 +325,7 @@ export function Manage() {
                   type="radio"
                   name="pageFormat"
                   checked={exportConfig.pageFormat === "letter"}
+                  disabled={!canEdit}
                   onChange={() => updateExportConfig({ pageFormat: "letter", preset: "custom" })}
                 />
                 US Letter
@@ -317,6 +341,7 @@ export function Manage() {
                   <button
                     key={fmt}
                     className={`btn btn-sm ${exportConfig.exportFormat === fmt ? "btn-primary" : ""}`}
+                    disabled={!canEdit}
                     onClick={() => updateExportConfig({ exportFormat: fmt })}
                   >
                     {fmt.toUpperCase()}
@@ -365,6 +390,7 @@ export function Manage() {
               </button>
               <button
                 className="btn"
+                disabled={!canEdit}
                 onClick={() => {
                   setDarkMode(!darkMode);
                   void saveToStorage();
@@ -377,6 +403,7 @@ export function Manage() {
               <input
                 type="checkbox"
                 checked={exportConfig.excludeNonChapters}
+                disabled={!canEdit}
                 onChange={(e) => updateExportConfig({ excludeNonChapters: e.target.checked })}
               />
               Exclude non-chapters from word count
@@ -412,9 +439,9 @@ export function Manage() {
           </div>
           {!confirmDelete ? (
             <button
-              className="btn btn-danger"
-              onClick={() => setConfirmDelete(true)}
-              disabled={!currentProjectId}
+                  className="btn btn-danger"
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={!currentProjectId || !isOwner}
             >
               Delete This Project
             </button>
@@ -426,6 +453,7 @@ export function Manage() {
               <div className="manage-danger-actions">
                 <button
                   className="btn btn-danger"
+                  disabled={!isOwner}
                   onClick={() => {
                     if (currentProjectId) void deleteProject(currentProjectId);
                     setConfirmDelete(false);

@@ -1,13 +1,14 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useProjectStore } from "../store/useProjectStore";
-import { Brief } from "./Brief";
-import { ChapterPlan } from "./ChapterPlan";
-import { Bible } from "./Bible";
-import { Manuscript } from "./Manuscript";
-import { ApiSettingsModal } from "./ApiSettingsModal";
-import { Manage } from "./Manage";
-import { Inspiration } from "./Inspiration";
 import type { TabId } from "../types";
+
+const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
+const ChapterPlan = lazy(() => import("./ChapterPlan").then((mod) => ({ default: mod.ChapterPlan })));
+const Bible = lazy(() => import("./Bible").then((mod) => ({ default: mod.Bible })));
+const Manuscript = lazy(() => import("./Manuscript").then((mod) => ({ default: mod.Manuscript })));
+const ApiSettingsModal = lazy(() => import("./ApiSettingsModal").then((mod) => ({ default: mod.ApiSettingsModal })));
+const Manage = lazy(() => import("./Manage").then((mod) => ({ default: mod.Manage })));
+const Inspiration = lazy(() => import("./Inspiration").then((mod) => ({ default: mod.Inspiration })));
 
 
 const TABS: { id: TabId; label: string }[] = [
@@ -153,11 +154,12 @@ function SaveIndicator() {
   const dirty = useProjectStore((s) => s.dirty);
   const lastSaved = useProjectStore((s) => s.lastSaved);
   const saveToStorage = useProjectStore((s) => s.saveToStorage);
+  const syncStatus = useProjectStore((s) => s.syncStatus);
 
   return (
     <div className="save-indicator" style={{ cursor: "pointer" }} onClick={() => void saveToStorage()}>
       <span className={`save-dot ${dirty ? "dirty" : ""}`} />
-      {dirty ? "Unsaved changes" : lastSaved ? "Saved" : ""}
+      {dirty ? "Unsaved changes" : lastSaved ? `Saved · ${syncStatus}` : syncStatus}
     </div>
   );
 }
@@ -172,8 +174,29 @@ export function Layout() {
   const showApiSettings = useProjectStore((s) => s.showApiSettings);
   const setShowApiSettings = useProjectStore((s) => s.setShowApiSettings);
   const focusMode = useProjectStore((s) => s.focusMode);
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const [newProjectName, setNewProjectName] = useState("");
   const hasProject = !!currentProject;
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+
+  function renderActiveTab() {
+    switch (activeTab) {
+      case "brief":
+        return <Brief />;
+      case "plan":
+        return <ChapterPlan />;
+      case "bible":
+        return <Bible />;
+      case "manuscript":
+        return <Manuscript />;
+      case "inspiration":
+        return <Inspiration />;
+      case "manage":
+        return <Manage />;
+      default:
+        return null;
+    }
+  }
 
   return (
     <div className="layout">
@@ -206,7 +229,7 @@ export function Layout() {
 
         <div className="topbar-actions">
           {hasProject && <SaveIndicator />}
-          {hasProject && (
+          {hasProject && canEdit && (
             <button className="btn btn-sm" onClick={() => void saveToStorage()}>
               Save ({navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+S)
             </button>
@@ -283,17 +306,24 @@ export function Layout() {
             </div>
           </div>
         ) : (
-          <>
-            {activeTab === "brief" && <Brief />}
-            {activeTab === "plan" && <ChapterPlan />}
-            {activeTab === "bible" && <Bible />}
-            {activeTab === "manuscript" && <Manuscript />}
-            {activeTab === "inspiration" && <Inspiration />}
-            {activeTab === "manage" && <Manage />}
-          </>
+          <Suspense
+            fallback={
+              <div className="content">
+                <div className="content-narrow">
+                  <div className="card" style={{ padding: 16 }}>Loading…</div>
+                </div>
+              </div>
+            }
+          >
+            {renderActiveTab()}
+          </Suspense>
         )}
       </div>
-      {showApiSettings && <ApiSettingsModal onClose={() => setShowApiSettings(false)} />}
+      {showApiSettings && (
+        <Suspense fallback={null}>
+          <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

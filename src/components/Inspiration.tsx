@@ -300,12 +300,14 @@ function deduplicateFileName(name: string, existing: Set<string>): string {
 
 export function Inspiration() {
   const project = useProjectStore((s) => s.currentProject());
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const inspirationItems = useProjectStore((s) => s.inspirationItems);
   const addInspirationFiles = useProjectStore((s) => s.addInspirationFiles);
   const removeInspirationItem = useProjectStore((s) => s.removeInspirationItem);
   const updateInspirationItem = useProjectStore((s) => s.updateInspirationItem);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projectId = currentProjectId ?? "";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [filterTag, setFilterTag] = useState<string | null>(null);
@@ -339,22 +341,22 @@ export function Inspiration() {
         const buffer = await file.arrayBuffer();
         files.push({ sourcePath: "", fileName, data: new Uint8Array(buffer) });
       }
-      if (files.length > 0) {
+      if (files.length > 0 && canEdit) {
         await addInspirationFiles(files);
       }
     },
-    [addInspirationFiles, existingFileNames]
+    [addInspirationFiles, canEdit, existingFileNames]
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      if (e.dataTransfer.files.length > 0) {
+      if (canEdit && e.dataTransfer.files.length > 0) {
         void handleAddViaInput(e.dataTransfer.files);
       }
     },
-    [handleAddViaInput]
+    [canEdit, handleAddViaInput]
   );
 
   const handlePreview = useCallback(async (item: InspirationItem) => {
@@ -380,10 +382,16 @@ export function Inspiration() {
     <div className="content">
       <div className="content-wide">
         <div className="page-title">Inspiration</div>
+        {!canEdit && (
+          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+            View-only mode. You can browse inspiration files, but only editors can change the board.
+          </div>
+        )}
 
         <div className="insp-toolbar">
           <button
             className="btn btn-primary"
+            disabled={!canEdit}
             onClick={() => fileInputRef.current?.click()}
           >
             + Add Files
@@ -396,7 +404,7 @@ export function Inspiration() {
             style={{ display: "none" }}
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                void handleAddViaInput(e.target.files);
+                if (canEdit) void handleAddViaInput(e.target.files);
                 e.target.value = "";
               }
             }}
@@ -461,6 +469,7 @@ export function Inspiration() {
           className={`insp-drop-zone ${isDragging ? "dragging" : ""}`}
           onDragOver={(e) => {
             e.preventDefault();
+            if (!canEdit) return;
             setIsDragging(true);
           }}
           onDragLeave={() => setIsDragging(false)}
@@ -483,13 +492,26 @@ export function Inspiration() {
                   <InspirationCard
                     item={item}
                     projectId={projectId}
-                    onDelete={(id) => void removeInspirationItem(id)}
-                    onUpdate={updateInspirationItem}
+                    onDelete={(id) => {
+                      if (!canEdit) return;
+                      void removeInspirationItem(id);
+                    }}
+                    onUpdate={(id, updates) => {
+                      if (!canEdit) return;
+                      updateInspirationItem(id, updates);
+                    }}
                     onPreview={handlePreview}
                   />
                   <div className="insp-card-tag-row">
                     {item.tags.map((tag) => (
-                      <span key={tag} className="insp-tag removable" onClick={() => handleRemoveTag(item.id, tag)}>
+                      <span
+                        key={tag}
+                        className="insp-tag removable"
+                        onClick={() => {
+                          if (!canEdit) return;
+                          handleRemoveTag(item.id, tag);
+                        }}
+                      >
                         {tag} &times;
                       </span>
                     ))}
@@ -500,12 +522,12 @@ export function Inspiration() {
                         value={tagInput.value}
                         onChange={(e) => setTagInput({ itemId: item.id, value: e.target.value })}
                         onBlur={() => {
-                          handleAddTag(item.id, tagInput.value);
+                          if (canEdit) handleAddTag(item.id, tagInput.value);
                           setTagInput(null);
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
-                            handleAddTag(item.id, tagInput.value);
+                            if (canEdit) handleAddTag(item.id, tagInput.value);
                             setTagInput({ itemId: item.id, value: "" });
                           }
                           if (e.key === "Escape") setTagInput(null);
@@ -515,6 +537,7 @@ export function Inspiration() {
                     ) : (
                       <button
                         className="insp-tag-add"
+                        disabled={!canEdit}
                         onClick={() => setTagInput({ itemId: item.id, value: "" })}
                         title="Add tag"
                       >

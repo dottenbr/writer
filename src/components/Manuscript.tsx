@@ -15,7 +15,7 @@ import {
 } from "../lib/bible-highlight";
 import { useProjectStore } from "../store/useProjectStore";
 import { completeText } from "../lib/llm-service";
-import { estimatePages } from "../lib/markdown";
+import { estimatePages, htmlToMarkdown } from "../lib/markdown";
 import { buildWordDiff } from "../lib/text-diff";
 import type { Bible, BibleSection, Chapter, Comment, CommentReply, Project } from "../types";
 import {
@@ -27,7 +27,7 @@ import {
   SECTION_TYPE_LABELS,
 } from "../types";
 
-function EditorToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
+function EditorToolbar({ editor, canEdit }: { editor: ReturnType<typeof useEditor>; canEdit: boolean }) {
   const focusMode = useProjectStore((s) => s.focusMode);
   const setFocusMode = useProjectStore((s) => s.setFocusMode);
   if (!editor) return null;
@@ -42,7 +42,7 @@ function EditorToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
     children: React.ReactNode;
     title: string;
   }) => (
-    <button className={`editor-toolbar-btn ${active ? "is-active" : ""}`} onClick={onClick} title={title}>
+    <button className={`editor-toolbar-btn ${active ? "is-active" : ""}`} onClick={onClick} title={title} disabled={!canEdit}>
       {children}
     </button>
   );
@@ -323,6 +323,13 @@ export function Manuscript() {
   const resolveComment = useProjectStore((s) => s.resolveComment);
   const activeCommentId = useProjectStore((s) => s.activeCommentId);
   const setActiveCommentId = useProjectStore((s) => s.setActiveCommentId);
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
+  const syncStatus = useProjectStore((s) => s.syncStatus);
+  const chapterConflicts = useProjectStore((s) => s.chapterConflicts);
+  const chapterConflictDetails = useProjectStore((s) => s.chapterConflictDetails);
+  const loadChapterConflictDetails = useProjectStore((s) => s.loadChapterConflictDetails);
+  const acceptRemoteChapterConflict = useProjectStore((s) => s.acceptRemoteChapterConflict);
+  const overwriteRemoteChapterConflict = useProjectStore((s) => s.overwriteRemoteChapterConflict);
 
   const [showAskEditor, setShowAskEditor] = useState(false);
   const [askEditorForm, setAskEditorForm] = useState<AskEditorForm>({
@@ -345,11 +352,16 @@ export function Manuscript() {
   const [aiReviewPayload, setAiReviewPayload] = useState<AiReviewPayload | null>(null);
   const [aiOriginalAfterText, setAiOriginalAfterText] = useState("");
   const [aiReviewAfterDraft, setAiReviewAfterDraft] = useState("");
+  const [showConflictReview, setShowConflictReview] = useState(false);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const aiAfterEditorRef = useRef<HTMLDivElement>(null);
   const aiInlineEditorRef = useRef<HTMLDivElement>(null);
 
   const activeChapter = project?.chapters.find((c) => c.id === activeChapterId);
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const activeConflictDetails = activeChapter ? chapterConflictDetails[activeChapter.id] : undefined;
+  const hasActiveConflict = activeChapter ? Boolean(chapterConflicts[activeChapter.id]) : false;
+  const canEditChapter = canEdit && !hasActiveConflict;
   const sortedChapters = useMemo(() => [...(project?.chapters ?? [])].sort((a, b) => a.number - b.number), [project?.chapters]);
 
   const chapterNumberMap = useMemo(() => deriveChapterNumbers(sortedChapters), [sortedChapters]);
@@ -374,6 +386,13 @@ export function Manuscript() {
     if (!aiReviewPayload || aiReviewPayload.kind !== "editor-notes") return [];
     return formatReportLines(aiReviewAfterDraft);
   }, [aiReviewPayload, aiReviewAfterDraft]);
+  const conflictDiffSegments = useMemo(() => {
+    if (!activeChapter || !activeConflictDetails) return [];
+    return buildWordDiff(
+      htmlToMarkdown(activeConflictDetails.remoteContent ?? ""),
+      htmlToMarkdown(activeChapter.content ?? "")
+    );
+  }, [activeChapter, activeConflictDetails]);
 
   const handleAiDraftInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
     setAiReviewAfterDraft(event.currentTarget.innerText);
@@ -390,6 +409,15 @@ export function Manuscript() {
       }
     }
   }, [aiReviewPayload, aiReviewAfterDraft]);
+
+  useEffect(() => {
+    if (!activeChapter || !chapterConflicts[activeChapter.id] || activeConflictDetails) return;
+    void loadChapterConflictDetails(activeChapter.id);
+  }, [activeChapter, activeConflictDetails, chapterConflicts, loadChapterConflictDetails]);
+
+  useEffect(() => {
+    if (!hasActiveConflict) setShowConflictReview(false);
+  }, [hasActiveConflict]);
 
   type SidebarEntry = { type: "act"; actId: string; label: string } | { type: "chapter"; chapter: typeof sortedChapters[number] };
   const sidebarEntries = useMemo<SidebarEntry[]>(() => {
@@ -420,6 +448,7 @@ export function Manuscript() {
       }),
     ],
     content: activeChapter?.content || "",
+    editable: canEditChapter,
     onUpdate: ({ editor }) => {
       const state = useProjectStore.getState();
       const chapterId = state.activeChapterId;
@@ -430,7 +459,7 @@ export function Manuscript() {
     },
     editorProps: {
       handleKeyDown: (_, event) => {
-        if (event.key === "/" && !event.metaKey && !event.ctrlKey && !aiLocked) {
+        if (event.key === "/" && !event.metaKey && !event.ctrlKey && !aiLocked && canEditChapter) {
           setShowSlashMenu(true);
         }
         if (event.key === "Escape") {
@@ -439,7 +468,7 @@ export function Manuscript() {
         }
         if (event.key === "Tab" && event.shiftKey) {
           event.preventDefault();
-          if (aiLocked) return true;
+          if (aiLocked || !canEditChapter) return true;
           void runAiOnSelection("Continue this section with one strong paragraph.");
           return true;
         }
@@ -458,7 +487,7 @@ export function Manuscript() {
         return true;
       },
     },
-  });
+  }, [aiLocked, canEditChapter]);
 
   const [sceneHeadings, setSceneHeadings] = useState<Array<{ id: string; label: string; pos: number }>>([]);
   const refreshSceneHeadings = useCallback(() => {
@@ -839,7 +868,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
             )}
           </div>
           <div className="sidebar-footer">
-            <button className="btn btn-sm w-full" onClick={addChapter}>
+            <button className="btn btn-sm w-full" onClick={addChapter} disabled={!canEdit}>
               + Add Chapter
             </button>
           </div>
@@ -848,7 +877,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
 
       {activeChapter ? (
         <div className="manuscript-editor-area">
-          <EditorToolbar editor={editor} />
+          <EditorToolbar editor={editor} canEdit={canEditChapter} />
           {editor && (
             <BubbleMenu
               editor={editor}
@@ -860,22 +889,22 @@ Write a thorough editorial review of this chapter. Structure your response with 
               }}
             >
               <div className="bubble-menu">
-                <button className="btn btn-sm" onClick={() => editor.chain().focus().toggleHighlight().run()}>
+                <button className="btn btn-sm" onClick={() => editor.chain().focus().toggleHighlight().run()} disabled={!canEditChapter}>
                   Highlight
                 </button>
                 <button className="btn btn-sm" onClick={handleAddComment}>
                   Comment
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked} onClick={() => void runAiOnSelection("Expand this selection.")}>
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Expand this selection.")}>
                   Expand
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked} onClick={() => void runAiOnSelection("Shorten this selection.")}>
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Shorten this selection.")}>
                   Shorten
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked} onClick={() => void runAiOnSelection("Fix grammar and punctuation only.")}>
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Fix grammar and punctuation only.")}>
                   Grammar
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked} onClick={() => setShowSelectionPrompt(true)}>
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => setShowSelectionPrompt(true)}>
                   Edit...
                 </button>
               </div>
@@ -888,6 +917,59 @@ Write a thorough editorial review of this chapter. Structure your response with 
             onMouseLeave={() => setHoveredBibleRef(null)}
           >
             <div className="editor-page">
+              {!canEdit && (
+                <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+                  View-only mode. You can add comments, but editing is disabled for this role.
+                </div>
+              )}
+              {activeChapter && chapterConflicts[activeChapter.id] && (
+                <div className="card" style={{ marginBottom: 12, padding: 12 }}>
+                  <div>{chapterConflicts[activeChapter.id]}</div>
+                  <div className="flex-row gap-sm" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                    <button className="btn btn-sm" onClick={() => setShowConflictReview((value) => !value)}>
+                      {showConflictReview ? "Hide Review" : "Review Changes"}
+                    </button>
+                    <button className="btn btn-sm" onClick={() => void acceptRemoteChapterConflict(activeChapter.id)}>
+                      Use Remote Version
+                    </button>
+                    <button className="btn btn-sm" onClick={() => void overwriteRemoteChapterConflict(activeChapter.id)}>
+                      Keep My Draft
+                    </button>
+                  </div>
+                  {showConflictReview && (
+                    <div style={{ marginTop: 12 }}>
+                      {!activeConflictDetails ? (
+                        <div className="font-mono">Loading remote version…</div>
+                      ) : (
+                        <>
+                          <div className="font-mono" style={{ marginBottom: 8 }}>
+                            Remote version {activeConflictDetails.remoteVersion ?? "?"}
+                            {activeConflictDetails.remoteUpdatedAt
+                              ? ` · ${new Date(activeConflictDetails.remoteUpdatedAt).toLocaleString()}`
+                              : ""}
+                          </div>
+                          <div className="diff-content">
+                            {conflictDiffSegments.map((segment, index) => (
+                              <span
+                                key={`${segment.type}-${index}`}
+                                className={
+                                  segment.type === "added"
+                                    ? "diff-added"
+                                    : segment.type === "removed"
+                                      ? "diff-removed"
+                                      : undefined
+                                }
+                              >
+                                {segment.value}
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <h1 className="chapter-heading">
                 <span className="chapter-heading-number">
                   {formatSectionLabel(activeChapter.sectionType, chapterNumberMap.get(activeChapter.id) ?? null)} —{" "}
@@ -899,6 +981,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                   onChange={(e) => updateChapter(activeChapter.id, { title: e.target.value })}
                   placeholder="Untitled"
                   spellCheck={false}
+                  readOnly={!canEditChapter}
                 />
               </h1>
               <EditorContent editor={editor} />
@@ -908,9 +991,9 @@ Write a thorough editorial review of this chapter. Structure your response with 
                     <button
                       key={action.label}
                       className="slash-menu-item"
-                      disabled={action.ai && aiLocked}
+                      disabled={!canEditChapter || (action.ai && aiLocked)}
                       onClick={() => {
-                        if (action.ai && aiLocked) return;
+                        if (!canEditChapter || (action.ai && aiLocked)) return;
                         action.run();
                         setShowSlashMenu(false);
                       }}
@@ -1176,18 +1259,18 @@ Write a thorough editorial review of this chapter. Structure your response with 
               <button className="btn w-full" onClick={() => void saveToStorage()}>
                 Save Project
               </button>
-              <button className="btn w-full" onClick={() => void useProjectStore.getState().saveSnapshot()}>
+              <button className="btn w-full" onClick={() => void useProjectStore.getState().saveSnapshot()} disabled={!canEdit}>
                 Save Snapshot
               </button>
               <button className="btn w-full" onClick={() => void useProjectStore.getState().setActiveTab("manage")}>
                 Export Manuscript
               </button>
-              <button className="btn w-full" disabled={aiLocked} onClick={() => setShowAskEditor(true)}>
+              <button className="btn w-full" disabled={aiLocked || !canEditChapter} onClick={() => setShowAskEditor(true)}>
                 {aiPhase === "running" ? "Thinking..." : "Ask the Editor..."}
               </button>
               <button
                 className="btn w-full"
-                disabled={aiLocked}
+                disabled={aiLocked || !canEditChapter}
                 onClick={() => void runAiOnSelection("Polish for rhythm and lyric clarity while preserving voice.")}
               >
                 {aiPhase === "running" ? "Generating..." : "Polish / Lyric Pass"}
@@ -1195,6 +1278,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
               <button className="btn w-full" onClick={() => void useProjectStore.getState().setActiveTab("bible")}>
                 Refresh Bible
               </button>
+              <div className="font-mono">Sync: {syncStatus}</div>
             </div>
           </div>
 
@@ -1231,6 +1315,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                     max={max}
                     step={step}
                     value={activeChapter.writingDials[key]}
+                    disabled={!canEditChapter}
                     onChange={(e) =>
                       updateChapter(activeChapter.id, {
                         writingDials: { ...activeChapter.writingDials, [key]: Number(e.target.value) },
@@ -1254,6 +1339,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
               className="form-textarea"
               placeholder="Freeform notes about your manuscript..."
               value={project.generalNotes}
+              disabled={!canEditChapter}
               onChange={(e) => updateGeneralNotes(e.target.value)}
               style={{ minHeight: 200 }}
             />
@@ -1505,4 +1591,3 @@ Write a thorough editorial review of this chapter. Structure your response with 
     </div>
   );
 }
-

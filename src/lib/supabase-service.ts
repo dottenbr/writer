@@ -26,31 +26,32 @@ import type {
   TabId,
   BibleSection,
 } from "../types";
-import { createDefaultProject } from "../types";
+import {
+  createDefaultProject,
+  createDefaultCharacter,
+  createDefaultThread,
+  createDefaultLocation,
+  createDefaultCodexEntry,
+} from "../types";
 import type { ExportConfig } from "./export-config";
 import { defaultExportConfig } from "./export-config";
 import { htmlToMarkdown, countWords } from "./markdown";
 import { buildWordDiff, type DiffSegment } from "./text-diff";
+import {
+  readLocalLlmSettings,
+  writeLocalLlmSettings,
+  readUserConfig as readLocalUserConfig,
+  writeUserConfig as writeLocalUserConfig,
+  type LlmSettings,
+  type WriterConfig,
+} from "./local-config";
+export type { LlmSettings, WriterConfig } from "./local-config";
 
 // ────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────
 
 export type ProjectRole = "owner" | "editor" | "viewer";
-
-export interface LlmSettings {
-  anthropicKey?: string;
-  openaiKey?: string;
-  selectedProvider: "anthropic" | "openai";
-  selectedModel: string;
-}
-
-export interface WriterConfig {
-  lastProjectId?: string;
-  lastActiveTab?: TabId;
-  lastActiveBibleSection?: BibleSection;
-  lastActiveChapterId?: string | null;
-}
 
 export interface ProjectMember {
   id: string;
@@ -91,6 +92,8 @@ interface RealtimeCallbacks {
   onCommentChange: (payload: { eventType: string; new: any; old: any }) => void;
 }
 
+const projectChannels = new Map<string, ReturnType<typeof supabase.channel>>();
+
 // ────────────────────────────────────────────────────────────
 // Auth
 // ────────────────────────────────────────────────────────────
@@ -124,21 +127,12 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
 // User Config (localStorage — not Supabase)
 // ────────────────────────────────────────────────────────────
 
-const CONFIG_KEY = "writer:user-config";
-
 export function readUserConfig(): WriterConfig {
-  try {
-    const raw = localStorage.getItem(CONFIG_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return readLocalUserConfig();
 }
 
 export function writeUserConfig(config: WriterConfig): void {
-  try {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-  } catch {}
+  writeLocalUserConfig(config);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -190,6 +184,8 @@ function mapDbChapter(row: any): Chapter {
   return {
     id: row.id,
     number: (row.sort_order ?? 0) + 1,
+    version: row.version ?? 1,
+    updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString(),
     sectionType: row.section_type ?? "chapter",
     title: row.title ?? "",
     act: row.act_id ?? null,
@@ -453,16 +449,26 @@ export async function saveProjectMeta(
 // ────────────────────────────────────────────────────────────
 
 export async function saveActs(projectId: string, acts: ProjectAct[]): Promise<void> {
-  // Delete existing and re-insert (simple approach for ordered lists)
-  await supabase.from("acts").delete().eq("project_id", projectId);
-  if (acts.length === 0) return;
+  const keepIds = acts.map((act) => act.id);
+  if (keepIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("acts")
+      .delete()
+      .eq("project_id", projectId)
+      .not("id", "in", `(${keepIds.map((id) => `"${id}"`).join(",")})`);
+    if (deleteError) throw deleteError;
+  } else {
+    const { error: deleteAllError } = await supabase.from("acts").delete().eq("project_id", projectId);
+    if (deleteAllError) throw deleteAllError;
+    return;
+  }
   const rows = acts.map((a, i) => ({
     id: a.id,
     project_id: projectId,
     label: a.label,
     sort_order: i,
   }));
-  const { error } = await supabase.from("acts").insert(rows);
+  const { error } = await supabase.from("acts").upsert(rows);
   if (error) throw error;
 }
 
@@ -474,7 +480,7 @@ export async function saveChapter(
   projectId: string,
   chapter: Chapter,
   expectedVersion?: number
-): Promise<{ conflict: boolean; serverVersion?: number }> {
+): Promise<{ conflict: boolean; serverVersion?: number; newVersion?: number; updatedAt?: string }> {
   const row: Record<string, any> = {
     id: chapter.id,
     project_id: projectId,
@@ -504,10 +510,10 @@ export async function saveChapter(
       .update({ ...row, version: expectedVersion + 1 })
       .eq("id", chapter.id)
       .eq("version", expectedVersion)
-      .select("version")
+      .select("version, updated_at")
       .maybeSingle();
 
-    if (!data) {
+    if (error || !data) {
       // Conflict: fetch current version
       const { data: current } = await supabase
         .from("chapters")
@@ -516,13 +522,37 @@ export async function saveChapter(
         .single();
       return { conflict: true, serverVersion: current?.version };
     }
-    return { conflict: false };
+    return {
+      conflict: false,
+      newVersion: data.version ?? expectedVersion + 1,
+      updatedAt: data.updated_at ?? new Date().toISOString(),
+    };
   }
 
   // Upsert without locking
-  const { error } = await supabase.from("chapters").upsert(row);
+  const { data, error } = await supabase
+    .from("chapters")
+    .upsert(row)
+    .select("version, updated_at")
+    .single();
   if (error) throw error;
-  return { conflict: false };
+  return {
+    conflict: false,
+    newVersion: data?.version ?? chapter.version ?? 1,
+    updatedAt: data?.updated_at ?? new Date().toISOString(),
+  };
+}
+
+export async function readProjectChapter(projectId: string, chapterId: string): Promise<Chapter | null> {
+  const { data, error } = await supabase
+    .from("chapters")
+    .select("*")
+    .eq("project_id", projectId)
+    .eq("id", chapterId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return mapDbChapter(data);
 }
 
 export async function deleteChapter(chapterId: string): Promise<void> {
@@ -545,8 +575,19 @@ export async function reorderChapters(projectId: string, chapterIds: string[]): 
 // ────────────────────────────────────────────────────────────
 
 export async function saveScenes(chapterId: string, scenes: Scene[]): Promise<void> {
-  await supabase.from("scenes").delete().eq("chapter_id", chapterId);
-  if (scenes.length === 0) return;
+  const keepIds = scenes.map((scene) => scene.id);
+  if (keepIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("scenes")
+      .delete()
+      .eq("chapter_id", chapterId)
+      .not("id", "in", `(${keepIds.map((id) => `"${id}"`).join(",")})`);
+    if (deleteError) throw deleteError;
+  } else {
+    const { error: deleteAllError } = await supabase.from("scenes").delete().eq("chapter_id", chapterId);
+    if (deleteAllError) throw deleteAllError;
+    return;
+  }
   const rows = scenes.map((s, i) => ({
     id: s.id,
     chapter_id: chapterId,
@@ -559,7 +600,7 @@ export async function saveScenes(chapterId: string, scenes: Scene[]): Promise<vo
     notes: s.notes,
     word_target: s.wordTarget,
   }));
-  const { error } = await supabase.from("scenes").insert(rows);
+  const { error } = await supabase.from("scenes").upsert(rows);
   if (error) throw error;
 }
 
@@ -595,21 +636,31 @@ export async function saveCharacter(projectId: string, character: Character): Pr
   });
   if (charErr) throw charErr;
 
-  // Sync relationships
-  await supabase.from("character_relationships").delete().eq("character_id", character.id);
-  if (character.relationships.length > 0) {
-    const rels = character.relationships
-      .filter((r) => r.withCharacterId)
-      .map((r) => ({
-        id: r.id,
-        character_id: character.id,
-        with_character_id: r.withCharacterId,
-        type: r.type,
-        description: r.description,
-      }));
-    if (rels.length > 0) {
-      try { await supabase.from("character_relationships").insert(rels); } catch {}
-    }
+  const rels = character.relationships
+    .filter((r) => r.withCharacterId)
+    .map((r) => ({
+      id: r.id,
+      character_id: character.id,
+      with_character_id: r.withCharacterId,
+      type: r.type,
+      description: r.description,
+    }));
+  const keepIds = rels.map((rel) => rel.id);
+  if (keepIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("character_relationships")
+      .delete()
+      .eq("character_id", character.id)
+      .not("id", "in", `(${keepIds.map((id) => `"${id}"`).join(",")})`);
+    if (deleteError) throw deleteError;
+    const { error: relError } = await supabase.from("character_relationships").upsert(rels);
+    if (relError) throw relError;
+  } else {
+    const { error: deleteAllError } = await supabase
+      .from("character_relationships")
+      .delete()
+      .eq("character_id", character.id);
+    if (deleteAllError) throw deleteAllError;
   }
 }
 
@@ -751,6 +802,78 @@ export async function resolveComment(commentId: string): Promise<void> {
     .eq("id", commentId);
 }
 
+interface SnapshotCommentState {
+  id: string;
+  chapter_id: string;
+  author_id: string | null;
+  text: string;
+  quoted_text: string;
+  created_at: string | null;
+  resolved_at: string | null;
+  replies: Array<{
+    id: string;
+    author_id: string | null;
+    text: string;
+    created_at: string | null;
+  }>;
+}
+
+async function readSnapshotCommentState(projectId: string): Promise<SnapshotCommentState[]> {
+  const { data, error } = await supabase
+    .from("comments")
+    .select("id, chapter_id, author_id, text, quoted_text, created_at, resolved_at, comment_replies(id, author_id, text, created_at)")
+    .eq("project_id", projectId)
+    .order("created_at");
+  if (error) throw error;
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    chapter_id: row.chapter_id,
+    author_id: row.author_id ?? null,
+    text: row.text ?? "",
+    quoted_text: row.quoted_text ?? "",
+    created_at: row.created_at ?? null,
+    resolved_at: row.resolved_at ?? null,
+    replies: (row.comment_replies ?? []).map((reply: any) => ({
+      id: reply.id,
+      author_id: reply.author_id ?? null,
+      text: reply.text ?? "",
+      created_at: reply.created_at ?? null,
+    })),
+  }));
+}
+
+async function restoreSnapshotCommentState(projectId: string, comments: SnapshotCommentState[]): Promise<void> {
+  const { error: deleteError } = await supabase.from("comments").delete().eq("project_id", projectId);
+  if (deleteError) throw deleteError;
+  if (comments.length === 0) return;
+
+  const commentRows = comments.map((comment) => ({
+    id: comment.id,
+    project_id: projectId,
+    chapter_id: comment.chapter_id,
+    author_id: comment.author_id,
+    text: comment.text,
+    quoted_text: comment.quoted_text,
+    created_at: comment.created_at,
+    resolved_at: comment.resolved_at,
+  }));
+  const { error: commentError } = await supabase.from("comments").insert(commentRows);
+  if (commentError) throw commentError;
+
+  const replyRows = comments.flatMap((comment) =>
+    comment.replies.map((reply) => ({
+      id: reply.id,
+      comment_id: comment.id,
+      author_id: reply.author_id,
+      text: reply.text,
+      created_at: reply.created_at,
+    }))
+  );
+  if (replyRows.length === 0) return;
+  const { error: replyError } = await supabase.from("comment_replies").insert(replyRows);
+  if (replyError) throw replyError;
+}
+
 // ────────────────────────────────────────────────────────────
 // Settings
 // ────────────────────────────────────────────────────────────
@@ -804,30 +927,13 @@ export async function saveExportConfig(projectId: string, config: ExportConfig):
 }
 
 export async function readLlmSettings(projectId: string): Promise<LlmSettings> {
-  const defaults: LlmSettings = { selectedProvider: "anthropic", selectedModel: "claude-sonnet-4" };
-  const { data } = await supabase
-    .from("llm_settings")
-    .select("*")
-    .eq("project_id", projectId)
-    .maybeSingle();
-  if (!data) return defaults;
-  return {
-    selectedProvider: data.selected_provider as any,
-    selectedModel: data.selected_model,
-    anthropicKey: data.anthropic_key ?? undefined,
-    openaiKey: data.openai_key ?? undefined,
-  };
+  void projectId;
+  return readLocalLlmSettings();
 }
 
 export async function saveLlmSettings(projectId: string, settings: LlmSettings): Promise<void> {
-  const { error } = await supabase.from("llm_settings").upsert({
-    project_id: projectId,
-    selected_provider: settings.selectedProvider,
-    selected_model: settings.selectedModel,
-    anthropic_key: settings.anthropicKey ?? null,
-    openai_key: settings.openaiKey ?? null,
-  }, { onConflict: "project_id" });
-  if (error) throw error;
+  void projectId;
+  writeLocalLlmSettings(settings);
 }
 
 export async function saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
@@ -1005,6 +1111,10 @@ export async function createSnapshot(
   const user = await getCurrentUser();
   if (!user) throw new Error("Not authenticated");
 
+  const project = await readProject(projectId);
+  const exportConfig = await readExportConfig(projectId);
+  const inspirationItems = await readInspirationItems(projectId);
+  const comments = await readSnapshotCommentState(projectId);
   const { data: chapters } = await supabase
     .from("chapters")
     .select("id, sort_order, title, section_type, content, word_count, status")
@@ -1020,6 +1130,12 @@ export async function createSnapshot(
       author_id: user.id,
       message,
       word_count: totalWords,
+      project_state: {
+        project,
+        exportConfig,
+        inspirationItems,
+        comments,
+      },
     })
     .select()
     .single();
@@ -1127,24 +1243,11 @@ export async function diffSnapshots(
 export async function restoreSnapshot(snapshotId: string, projectId: string): Promise<void> {
   // Safety: create snapshot of current state first
   await createSnapshot(projectId, "Auto-snapshot before restore");
-
-  const { data: snapshotChapters } = await supabase
-    .from("snapshot_chapters")
-    .select("*")
-    .eq("snapshot_id", snapshotId)
-    .order("sort_order");
-
-  for (const sc of snapshotChapters ?? []) {
-    await supabase
-      .from("chapters")
-      .update({
-        content: sc.content,
-        title: sc.title,
-        word_count: sc.word_count,
-        status: sc.status,
-      })
-      .eq("id", sc.chapter_id);
-  }
+  const { error } = await supabase.rpc("restore_project_snapshot", {
+    p_project_id: projectId,
+    p_snapshot_id: snapshotId,
+  });
+  if (error) throw error;
 }
 
 export async function getWordCountProgress(
@@ -1188,9 +1291,15 @@ export function subscribeToProject(
   projectId: string,
   callbacks: RealtimeCallbacks
 ): () => void {
+  const existing = projectChannels.get(projectId);
+  if (existing) {
+    supabase.removeChannel(existing);
+    projectChannels.delete(projectId);
+  }
   const channel = supabase.channel(`project:${projectId}`, {
     config: { presence: { key: "editors" } },
   });
+  projectChannels.set(projectId, channel);
 
   channel.on("presence", { event: "sync" }, () => {
     const state = channel.presenceState<PresencePayload>();
@@ -1213,13 +1322,15 @@ export function subscribeToProject(
   channel.subscribe();
 
   return () => {
+    projectChannels.delete(projectId);
     supabase.removeChannel(channel);
   };
 }
 
 export function broadcastPresence(projectId: string, payload: PresencePayload): void {
-  const channel = supabase.channel(`project:${projectId}`);
-  channel.track(payload);
+  const channel = projectChannels.get(projectId);
+  if (!channel) return;
+  void channel.track(payload);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1250,8 +1361,6 @@ export async function exportProjectAsZip(projectId: string, projectName: string)
   // Settings
   const exportConfig = await readExportConfig(projectId);
   writerDir.file("export-config.json", JSON.stringify(exportConfig, null, 2));
-  const llmSettings = await readLlmSettings(projectId);
-  writerDir.file("settings.json", JSON.stringify(llmSettings, null, 2));
 
   // Brief data
   writerDir.file("project.json", JSON.stringify({
@@ -1365,18 +1474,56 @@ export async function importProjectFromZip(zipData: Blob | Uint8Array): Promise<
     const file = zip.file(`.writer/${name}.json`);
     if (file) {
       const items = JSON.parse(await file.async("string"));
-      // Re-insert with new IDs into the appropriate table
-      // Simplified: just use the raw data
+      if (!Array.isArray(items)) continue;
+      if (name === "characters") {
+        for (const item of items) {
+          await saveCharacter(projectId, {
+            ...createDefaultCharacter(),
+            ...item,
+            id: item.id || crypto.randomUUID(),
+            relationships: Array.isArray(item.relationships) ? item.relationships : [],
+          });
+        }
+      }
+      if (name === "threads") {
+        for (const item of items) {
+          await saveThread(projectId, {
+            ...createDefaultThread(),
+            ...item,
+            id: item.id || crypto.randomUUID(),
+            alsoKnownAs: item.alsoKnownAs ?? [],
+            chapters: item.chapters ?? [],
+            historicalAnchors: item.historicalAnchors ?? [],
+            sources: item.sources ?? [],
+          });
+        }
+      }
+      if (name === "locations") {
+        for (const item of items) {
+          await saveLocation(projectId, {
+            ...createDefaultLocation(),
+            ...item,
+            id: item.id || crypto.randomUUID(),
+            alsoKnownAs: item.alsoKnownAs ?? [],
+            sources: item.sources ?? [],
+          });
+        }
+      }
+      if (name === "codex") {
+        for (const item of items) {
+          await saveCodexEntry(projectId, {
+            ...createDefaultCodexEntry(),
+            ...item,
+            id: item.id || crypto.randomUUID(),
+            alsoKnownAs: item.alsoKnownAs ?? [],
+            sources: item.sources ?? [],
+          });
+        }
+      }
     }
   }
 
   // Import settings
-  const settingsFile = zip.file(".writer/settings.json");
-  if (settingsFile) {
-    const settings = JSON.parse(await settingsFile.async("string"));
-    await saveLlmSettings(projectId, settings);
-  }
-
   const exportFile = zip.file(".writer/export-config.json");
   if (exportFile) {
     const config = JSON.parse(await exportFile.async("string"));

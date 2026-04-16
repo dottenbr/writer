@@ -166,6 +166,7 @@ export interface Bible {
 
 export interface Character {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   role: "protagonist" | "antagonist" | "supporting" | "minor" | "mentioned";
@@ -207,6 +208,7 @@ export interface CharacterRelationship {
 
 export interface Thread {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   type: "main" | "subplot" | "thematic" | "mystery" | "romance";
@@ -222,6 +224,7 @@ export interface Thread {
 
 export interface Location {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   timeframe: string;
@@ -236,6 +239,7 @@ export interface Location {
 
 export interface CodexEntry {
   id: string;
+  version?: number;
   entryType: "event" | "institution" | "term" | "person" | "timeline" | "doctrine" | "constraint";
   category: string;
   name: string;

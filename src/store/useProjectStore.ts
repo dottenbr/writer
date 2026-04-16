@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useAuthStore } from "./useAuthStore";
 import type {
   Project,
   ProjectAct,
@@ -26,8 +27,6 @@ import {
   isChapterType,
 } from "../types";
 import {
-  signIn as sbSignIn,
-  signOut as sbSignOut,
   getCurrentUser,
   listProjects as sbListProjects,
   readProject,
@@ -108,10 +107,13 @@ interface ChapterConflictDetails {
 }
 
 interface ProjectStore {
-  // Auth state
-  userId: string | null;
-  userEmail: string | null;
-  isAuthenticated: boolean;
+  // Re-exported from useAuthStore for migration compatibility
+  readonly userId: string | null;
+  readonly userEmail: string | null;
+  readonly isAuthenticated: boolean;
+  readonly signIn: (email: string, password: string) => Promise<void>;
+  readonly signOut: () => Promise<void>;
+  readonly checkAuth: () => Promise<boolean>;
 
   // App state
   projects: Project[];
@@ -149,11 +151,6 @@ interface ProjectStore {
   currentProject: () => Project | null;
   currentChapter: () => Chapter | null;
   totalWordCount: () => number;
-
-  // Auth actions
-  signIn: (email: string, password: string) => Promise<void>;
-  signOut: () => Promise<void>;
-  checkAuth: () => Promise<boolean>;
 
   // Project actions
   createProject: (name: string) => Promise<void>;
@@ -446,10 +443,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   }
 
   return ({
-  // Auth state
-  userId: null,
-  userEmail: null,
-  isAuthenticated: false,
+  // Re-exported from useAuthStore for migration compatibility
+  get userId() { return useAuthStore.getState().userId; },
+  get userEmail() { return useAuthStore.getState().userEmail; },
+  get isAuthenticated() { return useAuthStore.getState().isAuthenticated; },
+  get signIn() { return useAuthStore.getState().signIn; },
+  get signOut() { return useAuthStore.getState().signOut; },
+  get checkAuth() { return useAuthStore.getState().checkAuth; },
 
   // App state
   projects: [],
@@ -499,37 +499,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return proj.chapters
       .filter((ch) => !exclude || isChapterType(ch.sectionType))
       .reduce((sum, ch) => sum + ch.wordCount, 0);
-  },
-
-  // ─── Auth ───
-  signIn: async (email, password) => {
-    await sbSignIn(email, password);
-    const user = await getCurrentUser();
-    if (user) {
-      set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
-      await get().loadFromStorage();
-    }
-  },
-  signOut: async () => {
-    const unsub = get().realtimeUnsubscribe;
-    if (unsub) unsub();
-    await sbSignOut();
-    set({
-      userId: null,
-      userEmail: null,
-      isAuthenticated: false,
-      projects: [],
-      currentProjectId: null,
-      realtimeUnsubscribe: null,
-    });
-  },
-  checkAuth: async () => {
-    const user = await getCurrentUser();
-    if (user) {
-      set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
-      return true;
-    }
-    return false;
   },
 
   // ─── Project Actions ───
@@ -651,10 +620,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       lastActiveChapterId: s.activeChapterId,
     });
     // Broadcast presence
-    if (s.currentProjectId && s.userId) {
+    const auth = useAuthStore.getState();
+    if (s.currentProjectId && auth.userId) {
       broadcastPresence(s.currentProjectId, {
-        userId: s.userId,
-        displayName: s.userEmail ?? "",
+        userId: auth.userId,
+        displayName: auth.userEmail ?? "",
         activeChapterId: s.activeChapterId,
         activeTab: tab,
         lastSeen: new Date().toISOString(),
@@ -683,10 +653,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       lastActiveBibleSection: s.activeBibleSection,
       lastActiveChapterId: id,
     });
-    if (s.currentProjectId && s.userId) {
+    const auth = useAuthStore.getState();
+    if (s.currentProjectId && auth.userId) {
       broadcastPresence(s.currentProjectId, {
-        userId: s.userId,
-        displayName: s.userEmail ?? "",
+        userId: auth.userId,
+        displayName: auth.userEmail ?? "",
         activeChapterId: id,
         activeTab: s.activeTab,
         lastSeen: new Date().toISOString(),
@@ -1321,10 +1292,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   loadFromStorage: async () => {
     const user = await getCurrentUser();
     if (!user) {
-      set({ isAuthenticated: false, projects: [], currentProjectId: null });
+      useAuthStore.setState({ isAuthenticated: false });
+      set({ projects: [], currentProjectId: null });
       return;
     }
-    set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
+    useAuthStore.setState({ userId: user.id, userEmail: user.email, isAuthenticated: true });
 
     const cfg = readUserConfig();
     const projectList = await sbListProjects();

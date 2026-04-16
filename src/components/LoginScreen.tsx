@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { useProjectStore } from "../store/useProjectStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 export function LoginScreen() {
-  const { signIn } = useProjectStore();
+  const { signIn } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

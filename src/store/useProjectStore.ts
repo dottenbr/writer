@@ -90,6 +90,7 @@ import {
   writeLocalProjectBundle,
   removeLocalProjectBundle,
 } from "../lib/local-config";
+import { withRetry, withTimeout } from "../lib/sync-manager";
 
 interface ProgressStats {
   todayWords: number;
@@ -334,13 +335,34 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   }
 
+  /** Chapters currently being saved (in-flight guard, sub-item 2) */
+  const inFlightChapterIds = new Set<string>();
+
+  /** Content snapshots taken at save-start for in-flight comparison */
+  const inFlightSnapshots = new Map<string, { content: string; title: string }>();
+
   async function syncChapterToRemote(projectId: string, chapterId: string): Promise<void> {
+    // Sub-item 2: If this chapter is already in-flight, skip — it will be
+    // re-synced when the current save completes if still dirty.
+    if (inFlightChapterIds.has(chapterId)) return;
+
     const chapter = get().currentProject()?.chapters.find((item) => item.id === chapterId);
     if (!chapter) return;
 
+    // Sub-item 2: Snapshot content at save-start so we can detect
+    // edits that arrived during the in-flight save.
+    inFlightChapterIds.add(chapterId);
+    inFlightSnapshots.set(chapterId, { content: chapter.content, title: chapter.title });
+
     set({ syncStatus: "saving" });
     try {
-      const result = await saveChapter(projectId, chapter, chapter.version);
+      // Sub-items 3+4: Wrap save call with retry (exponential backoff)
+      // and timeout (15s per attempt).
+      const result = await withRetry(
+        () => saveChapter(projectId, chapter, chapter.version),
+        { maxAttempts: 5, initialDelayMs: 1_000, maxDelayMs: 30_000, timeoutMs: 15_000 }
+      );
+
       if (result.conflict) {
         set((state) => ({
           syncStatus: "conflict",
@@ -367,23 +389,59 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           ),
         }))
       );
+
+      // Sub-item 2: Only remove from dirtyChapterIds if content hasn't
+      // changed since save started. This prevents losing edits typed
+      // during an in-flight save.
       set((state) => {
         const nextConflicts = { ...state.chapterConflicts };
         const nextConflictDetails = { ...state.chapterConflictDetails };
         delete nextConflicts[chapterId];
         delete nextConflictDetails[chapterId];
+
+        const snapshot = inFlightSnapshots.get(chapterId);
+        const currentChapter = state.projects
+          .find((p) => p.id === projectId)
+          ?.chapters.find((c) => c.id === chapterId);
+
+        // Only clear dirty flag if content is unchanged since save started
+        const contentUnchanged =
+          snapshot &&
+          currentChapter &&
+          currentChapter.content === snapshot.content &&
+          currentChapter.title === snapshot.title;
+
         return {
           syncStatus: "saved",
           chapterConflicts: nextConflicts,
           chapterConflictDetails: nextConflictDetails,
-          dirtyChapterIds: state.dirtyChapterIds.filter((id) => id !== chapterId),
+          dirtyChapterIds: contentUnchanged
+            ? state.dirtyChapterIds.filter((id) => id !== chapterId)
+            : state.dirtyChapterIds,
           lastSaved: new Date().toISOString(),
         };
       });
       persistCurrentProjectLocally();
     } catch (error) {
-      console.error("[writer-store] syncChapterToRemote error:", error);
-      set({ syncStatus: "offline" });
+      console.error("[writer-store] syncChapterToRemote error after retries:", error);
+      // Sub-item 3: Keep chapter dirty so the next auto-save or manual
+      // save will retry. Set status to offline.
+      set((state) => ({
+        syncStatus: "offline",
+        dirtyChapterIds: state.dirtyChapterIds.includes(chapterId)
+          ? state.dirtyChapterIds
+          : [...state.dirtyChapterIds, chapterId],
+      }));
+    } finally {
+      // Sub-item 2: Clean up in-flight state
+      inFlightChapterIds.delete(chapterId);
+      inFlightSnapshots.delete(chapterId);
+
+      // Sub-item 2: If the chapter is still dirty (edits arrived during
+      // save), schedule another sync automatically.
+      if (get().dirtyChapterIds.includes(chapterId) && !chapterSyncTimers.has(chapterSyncKey(projectId, chapterId))) {
+        scheduleChapterSync(projectId, chapterId);
+      }
     }
   }
 
@@ -1425,15 +1483,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       persistCurrentProjectLocally();
       await get().flushPendingSync();
       // Granular saves have already been fired per-action.
-      // This is a safety-net full flush.
-      await saveProjectBrief(s.currentProjectId, project.brief);
-      await saveProjectMeta(s.currentProjectId, { name: project.name, generalNotes: project.generalNotes });
-      await saveActs(s.currentProjectId, project.acts);
+      // This is a safety-net full flush. Each call is wrapped with
+      // a 15s timeout (sub-item 4) to prevent hung saves.
+      await withTimeout(saveProjectBrief(s.currentProjectId, project.brief));
+      await withTimeout(saveProjectMeta(s.currentProjectId, { name: project.name, generalNotes: project.generalNotes }));
+      await withTimeout(saveActs(s.currentProjectId, project.acts));
       for (const ch of project.chapters) {
-        await saveChapter(s.currentProjectId, ch);
+        await withTimeout(saveChapter(s.currentProjectId, ch));
       }
-      await saveExportConfig(s.currentProjectId, s.exportConfig);
-      await saveLlmSettings(s.currentProjectId, s.llmSettings);
+      await withTimeout(saveExportConfig(s.currentProjectId, s.exportConfig));
+      await withTimeout(saveLlmSettings(s.currentProjectId, s.llmSettings));
 
       set({ dirty: false, lastSaved: new Date().toISOString() });
     } catch (err) {

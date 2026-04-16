@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Writer is a manuscript writing desktop app built with Tauri v2 + React + TypeScript. It runs as a native app via Tauri or in the browser during development (with a Vite dev-fs middleware simulating filesystem access).
+Writer is a collaborative manuscript writing app built with React + TypeScript + Supabase. It can run as a native desktop app via Tauri v2 or in the browser during development.
 
 ## Commands
 
@@ -16,36 +16,66 @@ Writer is a manuscript writing desktop app built with Tauri v2 + React + TypeScr
 
 ## Architecture
 
-### Dual Runtime (Tauri vs Browser Dev)
+### Storage: Supabase
 
-The app runs in two modes with a unified filesystem abstraction:
+All project data is stored in a local Supabase instance (PostgreSQL). The Supabase client is configured in `src/lib/supabase-client.ts` and defaults to `http://127.0.0.1:54321`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` env vars to override.
 
-- **Tauri**: uses `@tauri-apps/plugin-fs` and `@tauri-apps/plugin-shell` for real filesystem and git operations
-- **Browser dev**: uses a custom Vite plugin (`vite-plugin-fs.ts`) that exposes `/__fs/*` HTTP endpoints, proxying to Node's `fs` module. All paths are sandboxed to `~/Documents/Writer/`.
+`src/lib/supabase-service.ts` is the storage abstraction layer — every read/write goes through it. Never call the Supabase client directly from components; always go through `supabase-service.ts`.
 
-`src/lib/fs-backend.ts` is the abstraction layer — every filesystem call routes through it. Never import Tauri plugins directly in components; always go through `fs-backend.ts` or `fs-service.ts`.
+> **Legacy files**: `src/lib/fs-backend.ts` and `src/lib/fs-service.ts` still exist but are dead code — no app component imports them. They remain only as a reference for the old on-disk format.
 
-### On-Disk Project Format
+### Supabase Schema
 
-Projects live under `~/Documents/Writer/<project-slug>/` with this structure:
-- `chapters/` — markdown files named `NN-slug.md` (e.g., `01-the-beginning.md`), each with an H1 heading
-- `.writer/project.json` — brief metadata, act definitions, per-chapter metadata (scenes, status, dials, notes)
-- `.writer/characters.json`, `threads.json`, `locations.json`, `codex.json` — story bible data
-- `.writer/settings.json` — LLM provider config
-- `.writer/comments.json`, `export-config.json`, `inspiration.json` — auxiliary data
-- `prewriting/` — treatment, story-bible, outline markdown files
-- `style-rules.md` — prose style guide
-- `inspiration/` — reference files (images, PDFs, etc.)
+The schema is defined in `supabase/migrations/`. Key tables:
 
-Chapter content is stored as markdown on disk but converted to HTML (via TipTap) in memory. `fs-service.ts` handles the read/write round-trip including markdown-to-HTML and HTML-to-markdown conversion.
+- `projects` — project metadata plus flattened brief fields (`brief_title`, `brief_genre`, etc.)
+- `project_members` — collaboration membership with `project_role` enum (`owner`, `editor`, `viewer`)
+- `acts`, `chapters`, `scenes` — manuscript structure, ordered by `sort_order`
+- `characters`, `character_relationships`, `threads`, `locations`, `codex_entries` — story bible
+- `comments`, `comment_replies` — per-chapter commenting with resolve support
+- `snapshots`, `snapshot_chapters` — point-in-time chapter snapshots (replaces git versioning)
+- `project_settings`, `export_configs`, `llm_settings` — per-project configuration
+- `inspiration_items` — metadata; actual files live in the `inspiration` Supabase Storage bucket
+- `profiles` — extends `auth.users`, auto-created via a trigger on signup
+
+Chapters store content as HTML (TipTap format) in the `content` column. Markdown conversion happens only on export/import via `src/lib/markdown.ts`.
+
+Chapters support optimistic locking with a `version` column for collaborative editing conflict detection.
+
+### Authentication
+
+Supabase Auth handles signup/signin with email + password. The flow:
+
+1. `LoginScreen` component (`src/components/LoginScreen.tsx`) collects credentials
+2. `signIn()` / `signUp()` in `supabase-service.ts` call `supabase.auth`
+3. The Zustand store tracks `isAuthenticated` and `userId`
+4. User config (last project, last tab) is stored in `localStorage`, not Supabase
+
+### Row-Level Security (RLS)
+
+Every table has RLS enabled (`supabase/migrations/00002_rls_policies.sql`). A helper function `has_project_access(project_id, min_role)` gates all access:
+
+- **owner**: full CRUD on the project and its members
+- **editor**: read/write on all project content (chapters, bible, settings, snapshots)
+- **viewer**: read-only on content, but can create comments and replies
+
+LLM settings (API keys) require at least `editor` access.
+
+### Collaboration and Realtime
+
+- **Member management**: project owners can invite users by email with a role (`editor` or `viewer`) via the `Collaboration` component (`src/components/Collaboration.tsx`)
+- **Realtime presence**: `subscribeToProject()` opens a Supabase Realtime channel with presence tracking. Active editors see each other's display name, current tab, and chapter
+- **Realtime data sync**: postgres_changes subscriptions on `chapters` and `comments` tables push updates to all connected clients
+- **Presence broadcast**: `broadcastPresence()` sends the current user's cursor/tab state to the channel
 
 ### State Management
 
 Single Zustand store (`src/store/useProjectStore.ts`) holds all app state. Key patterns:
 - `updateCurrentProject()` helper for immutable project updates
-- Auto-save every 30s when dirty, plus Cmd+S manual save
-- `loadFromStorage()` reads from disk on boot; `saveToStorage()` writes everything back
-- Git snapshots via `src/lib/git.ts` — initializes a git repo in the project directory, commits on user action
+- **Immediate per-mutation saves**: each store action (e.g., updating a chapter, adding a character) fires a `void save*()` call to Supabase inline
+- **Safety-net full flush**: `saveToStorage()` writes the entire project to Supabase; called every 30s when dirty and on Cmd+S
+- `loadFromStorage()` reads from Supabase on boot (fetches project list, then loads the last-used project)
+- Snapshots via `supabase-service.ts` — replaces the old git-based versioning
 
 ### Key Types
 

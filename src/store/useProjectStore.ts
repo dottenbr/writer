@@ -1050,7 +1050,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
     persistCurrentProjectLocally();
     const char = get().currentProject()?.bible.characters.find((c) => c.id === id);
-    if (char && get().currentProjectId) void saveCharacter(get().currentProjectId!, char);
+    if (char && get().currentProjectId) {
+      void saveCharacter(get().currentProjectId!, char, char.version).then((result) => {
+        if (result.conflict) {
+          console.warn(`[writer-store] Character "${char.name}" version conflict (local=${char.version}, server=${result.serverVersion})`);
+        } else if (result.newVersion !== undefined) {
+          set((s) => updateCurrentProject(s, (p) => ({
+            ...p,
+            bible: { ...p.bible, characters: p.bible.characters.map((c) => c.id === id ? { ...c, version: result.newVersion } : c) },
+          })));
+        }
+      });
+    }
   },
   deleteCharacter: (id) => {
     if (!canEditCurrentProject()) return;
@@ -1086,7 +1097,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
     persistCurrentProjectLocally();
     const thread = get().currentProject()?.bible.threads.find((t) => t.id === id);
-    if (thread && get().currentProjectId) void saveThread(get().currentProjectId!, thread);
+    if (thread && get().currentProjectId) {
+      void saveThread(get().currentProjectId!, thread, thread.version).then((result) => {
+        if (result.conflict) {
+          console.warn(`[writer-store] Thread "${thread.name}" version conflict (local=${thread.version}, server=${result.serverVersion})`);
+        } else if (result.newVersion !== undefined) {
+          set((s) => updateCurrentProject(s, (p) => ({
+            ...p,
+            bible: { ...p.bible, threads: p.bible.threads.map((t) => t.id === id ? { ...t, version: result.newVersion } : t) },
+          })));
+        }
+      });
+    }
   },
   deleteThread: (id) => {
     if (!canEditCurrentProject()) return;
@@ -1122,7 +1144,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
     persistCurrentProjectLocally();
     const loc = get().currentProject()?.bible.locations.find((l) => l.id === id);
-    if (loc && get().currentProjectId) void saveLocation(get().currentProjectId!, loc);
+    if (loc && get().currentProjectId) {
+      void saveLocation(get().currentProjectId!, loc, loc.version).then((result) => {
+        if (result.conflict) {
+          console.warn(`[writer-store] Location "${loc.name}" version conflict (local=${loc.version}, server=${result.serverVersion})`);
+        } else if (result.newVersion !== undefined) {
+          set((s) => updateCurrentProject(s, (p) => ({
+            ...p,
+            bible: { ...p.bible, locations: p.bible.locations.map((l) => l.id === id ? { ...l, version: result.newVersion } : l) },
+          })));
+        }
+      });
+    }
   },
   deleteLocation: (id) => {
     if (!canEditCurrentProject()) return;
@@ -1158,7 +1191,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
     persistCurrentProjectLocally();
     const entry = get().currentProject()?.bible.codex.find((e) => e.id === id);
-    if (entry && get().currentProjectId) void saveCodexEntry(get().currentProjectId!, entry);
+    if (entry && get().currentProjectId) {
+      void saveCodexEntry(get().currentProjectId!, entry, entry.version).then((result) => {
+        if (result.conflict) {
+          console.warn(`[writer-store] CodexEntry "${entry.name}" version conflict (local=${entry.version}, server=${result.serverVersion})`);
+        } else if (result.newVersion !== undefined) {
+          set((s) => updateCurrentProject(s, (p) => ({
+            ...p,
+            bible: { ...p.bible, codex: p.bible.codex.map((e) => e.id === id ? { ...e, version: result.newVersion } : e) },
+          })));
+        }
+      });
+    }
   },
   deleteCodexEntry: (id) => {
     if (!canEditCurrentProject()) return;

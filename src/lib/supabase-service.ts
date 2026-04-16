@@ -33,7 +33,7 @@ import {
   createDefaultLocation,
   createDefaultCodexEntry,
 } from "../types";
-import type { ExportConfig } from "./export-config";
+import type { ExportConfig, ParagraphStyle, ExportFormat, ExportPreset } from "./export-config";
 import { defaultExportConfig } from "./export-config";
 import { htmlToMarkdown, countWords } from "./markdown";
 import { buildWordDiff, type DiffSegment } from "./text-diff";
@@ -84,6 +84,12 @@ export interface PresencePayload {
   activeChapterId: string | null;
   activeTab: TabId;
   lastSeen: string;
+}
+
+export interface SaveResult {
+  conflict: boolean;
+  serverVersion?: number;
+  newVersion?: number;
 }
 
 interface RealtimeCallbacks {
@@ -208,6 +214,7 @@ function mapDbCharacter(row: any): Character {
   }));
   return {
     id: row.id,
+    version: row.version ?? undefined,
     name: row.name ?? "",
     alsoKnownAs: row.also_known_as ?? [],
     role: row.role ?? "supporting",
@@ -236,6 +243,7 @@ function mapDbCharacter(row: any): Character {
 function mapDbThread(row: any): Thread {
   return {
     id: row.id,
+    version: row.version ?? undefined,
     name: row.name ?? "",
     alsoKnownAs: row.also_known_as ?? [],
     type: row.type ?? "subplot",
@@ -253,6 +261,7 @@ function mapDbThread(row: any): Thread {
 function mapDbLocation(row: any): Location {
   return {
     id: row.id,
+    version: row.version ?? undefined,
     name: row.name ?? "",
     alsoKnownAs: row.also_known_as ?? [],
     timeframe: row.timeframe ?? "",
@@ -269,6 +278,7 @@ function mapDbLocation(row: any): Location {
 function mapDbCodexEntry(row: any): CodexEntry {
   return {
     id: row.id,
+    version: row.version ?? undefined,
     entryType: row.entry_type ?? "term",
     category: row.category ?? "General",
     name: row.name ?? "",
@@ -321,7 +331,7 @@ export async function listProjects(): Promise<Array<{ id: string; name: string; 
     results.push({ id: p.id, name: p.name, role: "owner" });
   }
   for (const m of memberships ?? []) {
-    const proj = (m as any).projects;
+    const proj = (m as Record<string, unknown>).projects as { id: string; name: string } | null;
     if (proj && !results.some((r) => r.id === proj.id)) {
       results.push({ id: proj.id, name: proj.name, role: m.role as ProjectRole });
     }
@@ -608,8 +618,12 @@ export async function saveScenes(chapterId: string, scenes: Scene[]): Promise<vo
 // Bible: Characters
 // ────────────────────────────────────────────────────────────
 
-export async function saveCharacter(projectId: string, character: Character): Promise<void> {
-  const { error: charErr } = await supabase.from("characters").upsert({
+export async function saveCharacter(
+  projectId: string,
+  character: Character,
+  expectedVersion?: number
+): Promise<SaveResult> {
+  const row: Record<string, unknown> = {
     id: character.id,
     project_id: projectId,
     name: character.name,
@@ -633,9 +647,43 @@ export async function saveCharacter(projectId: string, character: Character): Pr
     hopes: character.hopes,
     drafting_note: character.draftingNote,
     notes: character.notes,
-  });
+  };
+
+  if (expectedVersion !== undefined) {
+    const { data, error } = await supabase
+      .from("characters")
+      .update({ ...row, version: expectedVersion + 1 })
+      .eq("id", character.id)
+      .eq("version", expectedVersion)
+      .select("version")
+      .maybeSingle();
+
+    if (error || !data) {
+      const { data: current } = await supabase
+        .from("characters")
+        .select("version")
+        .eq("id", character.id)
+        .single();
+      return { conflict: true, serverVersion: current?.version };
+    }
+
+    await syncCharacterRelationships(character);
+    return { conflict: false, newVersion: data.version ?? expectedVersion + 1 };
+  }
+
+  // Upsert without locking
+  const { data, error: charErr } = await supabase
+    .from("characters")
+    .upsert(row)
+    .select("version")
+    .single();
   if (charErr) throw charErr;
 
+  await syncCharacterRelationships(character);
+  return { conflict: false, newVersion: data?.version ?? character.version ?? 1 };
+}
+
+async function syncCharacterRelationships(character: Character): Promise<void> {
   const rels = character.relationships
     .filter((r) => r.withCharacterId)
     .map((r) => ({
@@ -672,8 +720,12 @@ export async function deleteCharacter(characterId: string): Promise<void> {
 // Bible: Threads
 // ────────────────────────────────────────────────────────────
 
-export async function saveThread(projectId: string, thread: Thread): Promise<void> {
-  const { error } = await supabase.from("threads").upsert({
+export async function saveThread(
+  projectId: string,
+  thread: Thread,
+  expectedVersion?: number
+): Promise<SaveResult> {
+  const row: Record<string, unknown> = {
     id: thread.id,
     project_id: projectId,
     name: thread.name,
@@ -687,8 +739,35 @@ export async function saveThread(projectId: string, thread: Thread): Promise<voi
     sources: thread.sources,
     resolution: thread.resolution,
     notes: thread.notes,
-  });
+  };
+
+  if (expectedVersion !== undefined) {
+    const { data, error } = await supabase
+      .from("threads")
+      .update({ ...row, version: expectedVersion + 1 })
+      .eq("id", thread.id)
+      .eq("version", expectedVersion)
+      .select("version")
+      .maybeSingle();
+
+    if (error || !data) {
+      const { data: current } = await supabase
+        .from("threads")
+        .select("version")
+        .eq("id", thread.id)
+        .single();
+      return { conflict: true, serverVersion: current?.version };
+    }
+    return { conflict: false, newVersion: data.version ?? expectedVersion + 1 };
+  }
+
+  const { data, error } = await supabase
+    .from("threads")
+    .upsert(row)
+    .select("version")
+    .single();
   if (error) throw error;
+  return { conflict: false, newVersion: data?.version ?? thread.version ?? 1 };
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
@@ -699,8 +778,12 @@ export async function deleteThread(threadId: string): Promise<void> {
 // Bible: Locations
 // ────────────────────────────────────────────────────────────
 
-export async function saveLocation(projectId: string, location: Location): Promise<void> {
-  const { error } = await supabase.from("locations").upsert({
+export async function saveLocation(
+  projectId: string,
+  location: Location,
+  expectedVersion?: number
+): Promise<SaveResult> {
+  const row: Record<string, unknown> = {
     id: location.id,
     project_id: projectId,
     name: location.name,
@@ -713,8 +796,35 @@ export async function saveLocation(projectId: string, location: Location): Promi
     sensory_details: location.sensoryDetails,
     sources: location.sources,
     notes: location.notes,
-  });
+  };
+
+  if (expectedVersion !== undefined) {
+    const { data, error } = await supabase
+      .from("locations")
+      .update({ ...row, version: expectedVersion + 1 })
+      .eq("id", location.id)
+      .eq("version", expectedVersion)
+      .select("version")
+      .maybeSingle();
+
+    if (error || !data) {
+      const { data: current } = await supabase
+        .from("locations")
+        .select("version")
+        .eq("id", location.id)
+        .single();
+      return { conflict: true, serverVersion: current?.version };
+    }
+    return { conflict: false, newVersion: data.version ?? expectedVersion + 1 };
+  }
+
+  const { data, error } = await supabase
+    .from("locations")
+    .upsert(row)
+    .select("version")
+    .single();
   if (error) throw error;
+  return { conflict: false, newVersion: data?.version ?? location.version ?? 1 };
 }
 
 export async function deleteLocation(locationId: string): Promise<void> {
@@ -725,8 +835,12 @@ export async function deleteLocation(locationId: string): Promise<void> {
 // Bible: Codex Entries
 // ────────────────────────────────────────────────────────────
 
-export async function saveCodexEntry(projectId: string, entry: CodexEntry): Promise<void> {
-  const { error } = await supabase.from("codex_entries").upsert({
+export async function saveCodexEntry(
+  projectId: string,
+  entry: CodexEntry,
+  expectedVersion?: number
+): Promise<SaveResult> {
+  const row: Record<string, unknown> = {
     id: entry.id,
     project_id: projectId,
     entry_type: entry.entryType,
@@ -736,8 +850,35 @@ export async function saveCodexEntry(projectId: string, entry: CodexEntry): Prom
     timeframe: entry.timeframe,
     sources: entry.sources,
     content: entry.content,
-  });
+  };
+
+  if (expectedVersion !== undefined) {
+    const { data, error } = await supabase
+      .from("codex_entries")
+      .update({ ...row, version: expectedVersion + 1 })
+      .eq("id", entry.id)
+      .eq("version", expectedVersion)
+      .select("version")
+      .maybeSingle();
+
+    if (error || !data) {
+      const { data: current } = await supabase
+        .from("codex_entries")
+        .select("version")
+        .eq("id", entry.id)
+        .single();
+      return { conflict: true, serverVersion: current?.version };
+    }
+    return { conflict: false, newVersion: data.version ?? expectedVersion + 1 };
+  }
+
+  const { data, error } = await supabase
+    .from("codex_entries")
+    .upsert(row)
+    .select("version")
+    .single();
   if (error) throw error;
+  return { conflict: false, newVersion: data?.version ?? entry.version ?? 1 };
 }
 
 export async function deleteCodexEntry(entryId: string): Promise<void> {
@@ -896,11 +1037,11 @@ export async function readExportConfig(projectId: string): Promise<ExportConfig>
     fontFamily: data.font_family,
     fontSize: data.font_size,
     lineSpacing: data.line_spacing,
-    paragraphStyle: data.paragraph_style as any,
-    pageFormat: data.page_format as any,
+    paragraphStyle: (data.paragraph_style ?? "indent") as ParagraphStyle,
+    pageFormat: (data.page_format ?? "letter") as "a4" | "letter",
     excludeNonChapters: data.exclude_non_chapters,
-    exportFormat: data.export_format as any,
-    preset: data.preset as any,
+    exportFormat: (data.export_format ?? "pdf") as ExportFormat,
+    preset: (data.preset ?? "manuscript") as ExportPreset,
   };
 }
 
@@ -1307,14 +1448,15 @@ export function subscribeToProject(
     callbacks.onPresenceChange(presences);
   });
 
+  // Cast required: supabase-js types lack an overload for "postgres_changes" on channel.on()
   channel
     .on(
-      "postgres_changes" as any,
+      "postgres_changes" as any,  // eslint-disable-line @typescript-eslint/no-explicit-any
       { event: "*", schema: "public", table: "chapters", filter: `project_id=eq.${projectId}` },
       (payload: any) => callbacks.onChapterChange(payload)
     )
     .on(
-      "postgres_changes" as any,
+      "postgres_changes" as any,  // eslint-disable-line @typescript-eslint/no-explicit-any
       { event: "*", schema: "public", table: "comments", filter: `project_id=eq.${projectId}` },
       (payload: any) => callbacks.onCommentChange(payload)
     );

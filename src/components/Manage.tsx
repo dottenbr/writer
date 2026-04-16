@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useProjectStore } from "../store/useProjectStore";
+import { useAuthStore } from "../store/useAuthStore";
 import { MANUSCRIPT_PRESET } from "../lib/export-config";
 import type { ExportFormat, ExportPreset, ParagraphStyle } from "../lib/export-config";
 import { Collaboration } from "./Collaboration";
@@ -36,8 +37,8 @@ export function Manage() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const exportConfig = useProjectStore((s) => s.exportConfig);
   const updateExportConfig = useProjectStore((s) => s.updateExportConfig);
-  const signOut = useProjectStore((s) => s.signOut);
-  const userEmail = useProjectStore((s) => s.userEmail);
+  const signOut = useAuthStore((s) => s.signOut);
+  const userEmail = useAuthStore((s) => s.userEmail);
   const progressStats = useProjectStore((s) => s.progressStats);
   const totalWordCount = useProjectStore((s) => s.totalWordCount());
   const currentProjectRole = useProjectStore((s) => s.currentProjectRole);

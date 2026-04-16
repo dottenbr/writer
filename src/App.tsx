@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from "react";
 import { useProjectStore } from "./store/useProjectStore";
+import { useAuthStore } from "./store/useAuthStore";
 import { Layout } from "./components/Layout";
 import { LoginScreen } from "./components/LoginScreen";
 
@@ -9,9 +10,8 @@ export default function App() {
     saveToStorage,
     dirty,
     darkMode,
-    isAuthenticated,
-    checkAuth,
   } = useProjectStore();
+  const { isAuthenticated, checkAuth } = useAuthStore();
   const didBootstrap = useRef(false);
 
   useEffect(() => {

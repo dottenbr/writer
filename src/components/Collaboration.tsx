@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 export function Collaboration() {
   const {
@@ -8,8 +9,8 @@ export function Collaboration() {
     inviteUser,
     removeProjectMember,
     activeEditors,
-    userId,
   } = useProjectStore();
+  const { userId } = useAuthStore();
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"editor" | "viewer">("viewer");

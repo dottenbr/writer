@@ -59,7 +59,7 @@ Every table has RLS enabled (`supabase/migrations/00002_rls_policies.sql`). A he
 - **editor**: read/write on all project content (chapters, bible, settings, snapshots)
 - **viewer**: read-only on content, but can create comments and replies
 
-LLM settings (API keys) require at least `editor` access.
+LLM settings (API keys) are restricted to `owner` access only.
 
 ### Collaboration and Realtime
 

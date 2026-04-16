@@ -455,7 +455,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   async function applyRemoteChapterChange(projectId: string, chapterId: string): Promise<void> {
     const state = get();
     if (state.currentProjectId !== projectId) return;
-    if (state.dirtyChapterIds.length > 0 || state.dirtyChapterIds.includes(chapterId)) {
+    if (state.dirtyChapterIds.includes(chapterId)) {
       set((current) => ({
         syncStatus: "conflict",
         chapterConflicts: {
@@ -1390,7 +1390,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const unsubscribe = subscribeToProject(targetId, {
         onPresenceChange: (presences) => set({ activeEditors: presences }),
         onChapterChange: (payload) => {
-          if (payload.new?.id) void applyRemoteChapterChange(targetId, payload.new.id);
+          if (payload.eventType === "DELETE") {
+            void refreshProjectFromRemote(targetId);
+          } else if (payload.new?.id) {
+            void applyRemoteChapterChange(targetId, payload.new.id);
+          }
         },
         onCommentChange: () => {
           sbReadComments(targetId).then((c) => {

@@ -118,6 +118,8 @@ interface ProjectStore {
 
   // App state
   projects: Project[];
+  projectCatalog: Array<{id:string;name:string;role:ProjectRole}>;
+  catalogStatus: "idle" | "loading" | "ready";
   currentProjectId: string | null;
   currentProjectRole: ProjectRole | null;
   activeTab: TabId;
@@ -233,14 +235,14 @@ interface ProjectStore {
   loadFromStorage: () => Promise<void>;
   saveToStorage: () => Promise<void>;
   exportCurrentProjectZip: () => Promise<void>;
-  importProjectZip: (data: Blob | Uint8Array) => Promise<void>;
+  importProjectZip: (data: Blob | Uint8Array, onProgress?:(message:string)=>void) => Promise<void>;
   flushPendingSync: () => Promise<void>;
 
   // LLM Settings
   updateLlmSettings: (updates: Partial<LlmSettings>) => Promise<void>;
 
   // Collaboration
-  inviteUser: (email: string, role: "editor" | "viewer") => Promise<void>;
+  inviteUser: (email: string, role: "coauthor" | "editor" | "viewer") => Promise<void>;
   removeProjectMember: (userId: string) => Promise<void>;
   refreshMembers: () => Promise<void>;
 
@@ -307,7 +309,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   function canEditCurrentProject(): boolean {
     const role = get().currentProjectRole;
-    return role === "owner" || role === "editor";
+    return role === "owner" || role === "coauthor" || role === "editor";
   }
 
   async function loadChapterConflictDetailsForProject(projectId: string, chapterId: string): Promise<void> {
@@ -511,6 +513,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // App state
   projects: [],
+  projectCatalog: [],
+  catalogStatus: "idle",
   currentProjectId: null,
   currentProjectRole: null,
   activeTab: "brief",
@@ -523,7 +527,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   focusMode: false,
   dirty: false,
   lastSaved: null,
-  llmSettings: { selectedProvider: "anthropic", selectedModel: "claude-sonnet-4" },
+  llmSettings: { selectedProvider: "bookkit", selectedModel: "@cf/moonshotai/kimi-k2.6" },
   snapshots: [],
   progressStats: { todayWords: 0, weekWords: 0, monthWords: 0, diffSummary: "" },
   askEditorResponse: "",
@@ -564,10 +568,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const label = cleanName(name) || "Untitled Novel";
     try {
       const project = await sbCreateProject(label);
+      const projectCatalog=await sbListProjects();
       set({
         projects: [project],
         currentProjectId: project.id,
         currentProjectRole: "owner",
+        projectCatalog,
         activeTab: "brief",
         activeChapterId: project.chapters[0]?.id ?? null,
         dirty: false,
@@ -583,10 +589,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     cancelScheduledProjectSyncs(id);
     await sbDeleteProject(id);
     removeLocalProjectBundle(id);
-    const projects = get().projects.filter((p) => p.id !== id);
-    const currentProjectId = get().currentProjectId === id ? (projects[0]?.id ?? null) : get().currentProjectId;
-    set({ projects, currentProjectId, dirty: false });
-    if (!currentProjectId) writeUserConfig({});
+    const projectCatalog=get().projectCatalog.filter(p=>p.id!==id);
+    const projects=get().projects.filter(p=>p.id!==id);
+    const wasCurrent=get().currentProjectId===id;
+    set({projects,projectCatalog,currentProjectId:wasCurrent?null:get().currentProjectId,dirty:false});
+    if(wasCurrent&&projectCatalog[0])await get().switchProject(projectCatalog[0].id);
+    else if(wasCurrent)writeUserConfig({});
   },
   switchProject: async (id) => {
     try {
@@ -595,13 +603,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const previousProjectId = get().currentProjectId;
       if (previousProjectId) cancelScheduledProjectSyncs(previousProjectId);
 
-      const project = await readProject(id);
-      const role = await getProjectRole(id);
-      const llmSettings = await readLlmSettings(id);
-      const comments = await sbReadComments(id);
-      const exportConfig = await readExportConfig(id);
-      const inspirationItems = await readInspirationItems(id);
-      const members = await listProjectMembers(id);
+      set({ catalogStatus: "loading" });
+      const [projectCatalog, project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([
+        sbListProjects(), readProject(id), getProjectRole(id), readLlmSettings(id), sbReadComments(id), readExportConfig(id), readInspirationItems(id), listProjectMembers(id),
+      ]);
 
       // Set up realtime
       const unsubscribe = subscribeToProject(id, {
@@ -626,6 +631,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         projects: [project],
         currentProjectId: id,
+        projectCatalog,
         currentProjectRole: role,
         activeTab: "brief",
         activeBibleSection: "characters",
@@ -650,8 +656,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         lastActiveBibleSection: "characters",
         lastActiveChapterId: project.chapters[0]?.id ?? null,
       });
+      set({ catalogStatus: "ready" });
       await get().refreshProgress();
     } catch (err) {
+      set({ catalogStatus: "ready" });
       console.error("[writer-store] switchProject FAILED:", err);
     }
   },
@@ -659,6 +667,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     if (!canEditCurrentProject()) return;
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, name: cleanName(name) } : p)),
+      projectCatalog:s.projectCatalog.map(p=>p.id===id?{...p,name:cleanName(name)}:p),
       dirty: true,
     }));
     persistCurrentProjectLocally();
@@ -1348,6 +1357,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // ─── Persistence ───
   loadFromStorage: async () => {
+    set({ catalogStatus: "loading" });
+    try { await loadAll(); } finally { set({ catalogStatus: "ready" }); }
+    async function loadAll() {
     const user = await getCurrentUser();
     if (!user) {
       useAuthStore.setState({ isAuthenticated: false });
@@ -1358,6 +1370,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     const cfg = readUserConfig();
     const projectList = await sbListProjects();
+    set({projectCatalog:projectList});
 
     if (projectList.length === 0) {
       set({ projects: [], currentProjectId: null, dirty: false });
@@ -1370,13 +1383,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       : projectList[0].id;
 
     try {
-      const project = await readProject(targetId);
-      const role = await getProjectRole(targetId);
-      const llmSettings = await readLlmSettings(targetId);
-      const comments = await sbReadComments(targetId);
-      const exportConfig = await readExportConfig(targetId);
-      const inspirationItems = await readInspirationItems(targetId);
-      const members = await listProjectMembers(targetId);
+      const [project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([
+        readProject(targetId), getProjectRole(targetId), readLlmSettings(targetId), sbReadComments(targetId), readExportConfig(targetId), readInspirationItems(targetId), listProjectMembers(targetId),
+      ]);
 
       // Restore UI state from config
       const activeTab: TabId = cfg.lastActiveTab ?? "brief";
@@ -1448,6 +1457,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       set({ projects: [], currentProjectId: null, dirty: false, syncStatus: "offline" });
     }
+    }
   },
 
   saveToStorage: async () => {
@@ -1497,8 +1507,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     await exportProjectAsZip(s.currentProjectId, project.name);
   },
 
-  importProjectZip: async (data) => {
-    const projectId = await importProjectFromZip(data);
+  importProjectZip: async (data,onProgress) => {
+    const projectId = await importProjectFromZip(data,onProgress);
     await get().switchProject(projectId);
   },
 
@@ -1575,6 +1585,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       dirty: false,
     }));
     persistCurrentProjectLocally();
+    await get().refreshProgress();
   },
   });
 });

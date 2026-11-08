@@ -8,6 +8,7 @@ export interface Project {
   name: string;
   createdAt: string;
   storagePath?: string;
+  bookkitSlug?: string;
   brief: Brief;
   acts: ProjectAct[];
   chapters: Chapter[];
@@ -293,7 +294,7 @@ export interface InspirationItem {
   addedAt: string;
 }
 
-export type TabId = "brief" | "plan" | "bible" | "manuscript" | "inspiration" | "manage";
+export type TabId = "book" | "brief" | "plan" | "bible" | "manuscript" | "inspiration" | "manage";
 
 export type BibleSection =
   | "characters"

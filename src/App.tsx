@@ -9,7 +9,6 @@ export default function App() {
     loadFromStorage,
     saveToStorage,
     dirty,
-    darkMode,
   } = useProjectStore();
   const { isAuthenticated, checkAuth } = useAuthStore();
   const didBootstrap = useRef(false);
@@ -37,7 +36,7 @@ export default function App() {
     (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
-        void saveToStorage();
+        if(window.dispatchEvent(new Event("writer-save-document", {cancelable:true}))) void saveToStorage();
       }
     },
     [saveToStorage]
@@ -60,7 +59,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app-root ${darkMode ? "dark" : ""}`}>
+    <div className="app-root">
       <Layout />
     </div>
   );

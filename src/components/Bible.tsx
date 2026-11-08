@@ -1015,7 +1015,7 @@ export function Bible() {
 
   if (!project) return null;
   const { bible } = project;
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
   const addActions: Record<BibleSection, () => void> = {
     characters: addCharacter,

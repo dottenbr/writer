@@ -3583,6 +3583,8 @@ input[type="radio"]:focus-visible {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
+  min-height: 100dvh;
+  padding: var(--space-lg);
   background: var(--bg-primary);
   background-image:
     radial-gradient(ellipse at 30% 20%, rgba(184, 134, 11, 0.04) 0%, transparent 60%),
@@ -3635,6 +3637,8 @@ input[type="radio"]:focus-visible {
 }
 
 .login-input {
+  width: 100%;
+  min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
@@ -3655,12 +3659,15 @@ input[type="radio"]:focus-visible {
 .login-error {
   color: #C0392B;
   font-size: 0.82rem;
-  margin: 0;
+  margin: var(--space-md) 0 0;
+  overflow-wrap: anywhere;
 }
 
 .login-button {
+  width: 100%;
+  min-height: 44px;
   padding: 11px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-size: 0.88rem;
   font-weight: 600;
@@ -3672,7 +3679,7 @@ input[type="radio"]:focus-visible {
   transition: background var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
 
-.login-button:hover {
+.login-button:hover:not(:disabled) {
   background: var(--accent-hover);
   box-shadow: var(--shadow-md);
 }
@@ -3680,6 +3687,39 @@ input[type="radio"]:focus-visible {
 .login-button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.login-button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
+}
+
+.login-alternative {
+  margin-top: var(--space-sm);
+}
+
+.login-alternative .login-button {
+  margin-top: 0;
+}
+
+.login-button-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.login-button-secondary:hover:not(:disabled) {
+  background: var(--bg-input);
+  border-color: var(--border-focus);
+}
+
+.login-code {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
 /* ============================================================
@@ -4169,3 +4209,31 @@ input[type="radio"]:focus-visible {
   font-family: var(--font-mono);
   font-size: 0.78rem;
 }
+
+.book-workspace { display:flex; height:100%; min-height:0; overflow:hidden; }
+.book-file-list { width:300px; flex-shrink:0; overflow:auto; padding:20px; border-right:1px solid var(--border-color, #ddd); }
+.book-file { display:block; width:100%; text-align:left; background:none; color:inherit; border:0; padding:8px; overflow-wrap:anywhere; cursor:pointer; }
+.book-file.selected { background:rgba(128,128,128,.2); font-weight:600; }
+.book-file-content { flex:1; min-width:0; padding:24px; overflow:auto; }
+.book-document { width:100%; min-height:55vh; padding:16px; font:16px/1.65 Georgia,serif; color:inherit; background:transparent; border:1px solid #999; resize:vertical; }
+.book-reference-notice { padding:12px; border-left:3px solid #c09050; }
+.book-ai { margin-top:24px; }
+.book-ai-result { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; margin:16px 0; }
+@media(max-width:700px) { .book-file-list { width:180px; padding:10px; } .book-file-content {padding:12px;} }
+
+.book-workspace:has(.book-review-panel) { grid-template-columns: minmax(180px, 240px) minmax(360px, 1fr) minmax(280px, 380px); }
+.book-review-panel {padding:20px;overflow:auto;border-left:1px solid var(--border);max-height:calc(100vh - 80px)}
+.book-review-panel h4 {margin-top:24px;margin-bottom:12px}
+.book-review-panel textarea {width:100%;min-height:72px;resize:vertical;background:var(--bg);color:inherit;border:1px solid var(--border);border-radius:6px;padding:9px}
+.review-card {border:1px solid var(--border);border-radius:8px;padding:12px;margin:12px 0;overflow-wrap:anywhere}
+.review-card .btn {margin:6px 5px 0 0}
+.thread-message {padding:8px 0;border-bottom:1px solid var(--border)}
+.thread-message time {display:block;font-size:11px;opacity:.65}
+.thread-message p {white-space:pre-wrap;margin:6px 0}
+.tracked-diff {white-space:pre-wrap;max-height:400px;overflow:auto;font-size:12px;line-height:1.6}
+.tracked-diff ins {background:#267d4433;color:inherit;text-decoration:underline}
+.tracked-diff del {background:#b5343433;color:inherit;text-decoration:line-through}
+.quoted-anchor {font:inherit;text-align:left;background:transparent;color:inherit;border:0;white-space:pre-wrap;cursor:pointer}
+.book-live-status {font-size:12px;opacity:.8}
+@media (max-width:1100px) {.book-workspace:has(.book-review-panel){grid-template-columns:200px minmax(0,1fr)}.book-review-panel{grid-column:2;max-height:none;border-left:0;border-top:1px solid var(--border)}}
+@media (max-width:700px) {.book-workspace:has(.book-review-panel){display:block}.book-review-panel{padding:12px}}

@@ -43,15 +43,15 @@ import {
   readUserConfig as readLocalUserConfig,
   writeUserConfig as writeLocalUserConfig,
   type LlmSettings,
-  type WriterConfig,
+  type BookkitConfig,
 } from "./local-config";
-export type { LlmSettings, WriterConfig } from "./local-config";
+export type { LlmSettings, BookkitConfig } from "./local-config";
 
 // ────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────
 
-export type ProjectRole = "owner" | "editor" | "viewer";
+export type ProjectRole = "owner" | "coauthor" | "editor" | "viewer";
 
 export interface ProjectMember {
   id: string;
@@ -60,6 +60,7 @@ export interface ProjectMember {
   displayName: string;
   role: ProjectRole;
   acceptedAt: string | null;
+  pending?: boolean;
 }
 
 export interface SnapshotEntry {
@@ -71,6 +72,7 @@ export interface SnapshotEntry {
 }
 
 export interface ChapterDiff {
+  fileChange?: "added" | "removed" | "modified";
   chapterId: string;
   title: string;
   wordCountA: number;
@@ -133,11 +135,11 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
 // User Config (localStorage — not Supabase)
 // ────────────────────────────────────────────────────────────
 
-export function readUserConfig(): WriterConfig {
+export function readUserConfig(): BookkitConfig {
   return readLocalUserConfig();
 }
 
-export function writeUserConfig(config: WriterConfig): void {
+export function writeUserConfig(config: BookkitConfig): void {
   writeLocalUserConfig(config);
 }
 
@@ -365,6 +367,7 @@ export async function readProject(projectId: string): Promise<Project> {
   const project = createDefaultProject(proj.name);
   project.id = proj.id;
   project.name = proj.name;
+  project.bookkitSlug = proj.bookkit_slug ?? undefined;
   project.createdAt = proj.created_at;
   project.brief = mapDbBrief(proj);
   project.generalNotes = proj.general_notes ?? "";
@@ -1178,32 +1181,24 @@ export async function updateInspirationItem(
 export async function inviteUser(
   projectId: string,
   email: string,
-  role: "editor" | "viewer"
+  role: "coauthor" | "editor" | "viewer"
 ): Promise<void> {
-  // Find user by email
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("email", email)
-    .maybeSingle();
-  if (!profile) throw new Error(`No user found with email: ${email}`);
-
-  const { error } = await supabase.from("project_members").upsert({
-    project_id: projectId,
-    user_id: profile.id,
-    role,
-    invited_at: new Date().toISOString(),
-    accepted_at: new Date().toISOString(), // Auto-accept for local dev
-  }, { onConflict: "project_id,user_id" });
-  if (error) throw error;
+  const {error}=await supabase.from('project_invitations').upsert({project_id:projectId,email:email.trim().toLowerCase(),role},{onConflict:'project_id,email'});
+  if(error)throw error;
 }
 
 export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
-  await supabase
+  if(userId.startsWith('invitation:')) {
+    const {error}=await supabase.from('project_invitations').delete().eq('project_id',projectId).eq('id',userId.slice(11));
+    if(error)throw error;
+    return;
+  }
+  const {error}=await supabase
     .from("project_members")
     .delete()
     .eq("project_id", projectId)
     .eq("user_id", userId);
+  if(error)throw error;
 }
 
 export async function listProjectMembers(projectId: string): Promise<ProjectMember[]> {
@@ -1211,14 +1206,16 @@ export async function listProjectMembers(projectId: string): Promise<ProjectMemb
     .from("project_members")
     .select("id, user_id, role, accepted_at, profiles(email, display_name)")
     .eq("project_id", projectId);
-  return (data ?? []).map((row: any) => ({
+  const {data:pending,error}=await supabase.from('project_invitations').select('id,email,role').eq('project_id',projectId);
+  if(error)throw error;
+  return [...(data ?? []).map((row: any) => ({
     id: row.id,
     userId: row.user_id,
     email: row.profiles?.email ?? "",
     displayName: row.profiles?.display_name ?? "",
     role: row.role,
     acceptedAt: row.accepted_at,
-  }));
+  })), ...(pending??[]).map(row=>({id:row.id,userId:'invitation:'+row.id,email:row.email,displayName:'',role:row.role as ProjectRole,acceptedAt:null,pending:true}))];
 }
 
 export async function getProjectRole(projectId: string): Promise<ProjectRole | null> {
@@ -1253,6 +1250,13 @@ export async function createSnapshot(
   if (!user) throw new Error("Not authenticated");
 
   const project = await readProject(projectId);
+  if(project.bookkitSlug) {
+    const {data:id,error}=await supabase.rpc('capture_bookkit_snapshot',{p_project_id:projectId,p_message:message});
+    if(error)throw error;
+    const {data:row,error:readError}=await supabase.from('snapshots').select('id,created_at,message,word_count').eq('id',id).single();
+    if(readError)throw readError;
+    return {id:row.id,date:row.created_at,message:row.message,wordCount:row.word_count,authorName:user.email};
+  }
   const exportConfig = await readExportConfig(projectId);
   const inspirationItems = await readInspirationItems(projectId);
   const comments = await readSnapshotCommentState(projectId);
@@ -1326,6 +1330,17 @@ export async function diffSnapshots(
   snapshotBId: string | "current",
   projectId: string
 ): Promise<ChapterDiff[]> {
+  const {data:project,error:projectError}=await supabase.from('projects').select('bookkit_slug').eq('id',projectId).single();
+  if(projectError)throw projectError;
+  if(project.bookkit_slug) {
+    const result:ChapterDiff[]=[];
+    for(let offset=0;;offset+=50) {
+      const {data,error}=await supabase.rpc('diff_bookkit_snapshot',{p_project_id:projectId,p_snapshot_id:snapshotAId,p_other_id:snapshotBId==='current'?null:snapshotBId,p_offset:offset});
+      if(error)throw error;
+      for(const row of data??[])result.push({chapterId:row.path,title:row.path,fileChange:row.before_text===null?"added":row.after_text===null?"removed":"modified",wordCountA:countWords(row.before_text??''),wordCountB:countWords(row.after_text??''),diff:buildWordDiff(row.before_text??'',row.after_text??'')});
+      if((data??[]).length<50)return result;
+    }
+  }
   const { data: chaptersA } = await supabase
     .from("snapshot_chapters")
     .select("*")
@@ -1382,6 +1397,13 @@ export async function diffSnapshots(
 }
 
 export async function restoreSnapshot(snapshotId: string, projectId: string): Promise<void> {
+  const {data:project,error:projectError}=await supabase.from('projects').select('bookkit_slug').eq('id',projectId).single();
+  if(projectError)throw projectError;
+  if(project.bookkit_slug) {
+    const {error}=await supabase.rpc('restore_bookkit_snapshot',{p_project_id:projectId,p_snapshot_id:snapshotId});
+    if(error)throw error;
+    return;
+  }
   // Safety: create snapshot of current state first
   await createSnapshot(projectId, "Auto-snapshot before restore");
   const { error } = await supabase.rpc("restore_project_snapshot", {
@@ -1554,11 +1576,16 @@ export async function exportProjectAsZip(projectId: string, projectName: string)
   URL.revokeObjectURL(url);
 }
 
-export async function importProjectFromZip(zipData: Blob | Uint8Array): Promise<string> {
+export async function importProjectFromZip(zipData: Blob | Uint8Array, onProgress?:(message:string)=>void): Promise<string> {
+  const blob=zipData instanceof Blob?zipData:new Blob([new Uint8Array(zipData)]);
+  const {importBookkitZip}=await import('./bookkit-import');
+  const bookId=await importBookkitZip(supabase,blob,onProgress);
+  if(bookId)return bookId;
   const JSZip = (await import("jszip")).default;
   const { markdownToHtml } = await import("./markdown");
   const zip = await JSZip.loadAsync(zipData);
 
+  if(!zip.file('.writer/project.json')&&!Object.keys(zip.files).some(p=>p.startsWith('chapters/')&&p.endsWith('.md')))throw new Error('This is not a Bookkit or legacy project archive.');
   // Read project.json for metadata
   let projectName = "Imported Project";
   let projectJson: any = {};
@@ -1746,4 +1773,197 @@ export async function saveFullProject(
   for (const item of inspirationItems) {
     await updateInspirationItem(item.id, { label: item.label, tags: item.tags, notes: item.notes });
   }
+}
+
+export interface BookDocumentRow {
+  asset?: {size_bytes:number;sha256:string;chunks:import('./bookkit-archive').AssetChunk[];unix_mode:number;is_directory:boolean};
+  revision_id?: string;
+  loaded?: boolean;
+  path: string;
+  content: string;
+  version: number;
+}
+export async function listBookDocuments(projectId: string): Promise<BookDocumentRow[]> {
+  const rows: BookDocumentRow[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabase.from('bookkit_documents').select('path,version').eq('project_id', projectId).order('path').range(offset, offset + 499);
+    if (error) throw error;
+    rows.push(...(data ?? []).map(d=>({...d,content:'',loaded:false})));
+    if ((data ?? []).length < 500) break;
+  }
+  // Research scans can contain megabytes of OCR. Fetch those only on demand.
+  const core = rows.filter(d=>!d.path.startsWith('research/'));
+  for(let offset=0;offset<core.length;offset+=100) {
+    const {data,error}=await supabase.from('bookkit_documents').select('path,content,version,revision_id').eq('project_id',projectId).in('path',core.slice(offset,offset+100).map(d=>d.path));
+    if(error)throw error;
+    for(const doc of data??[]) {const index=rows.findIndex(d=>d.path===doc.path); rows[index]={...doc,loaded:true};}
+  }
+  for(let offset=0;;offset+=500){const {data,error}=await supabase.from('bookkit_assets').select('path,size_bytes,sha256,chunks,unix_mode,is_directory').eq('project_id',projectId).order('path').range(offset,offset+499);if(error)throw error;for(const {path,...asset} of data??[])rows.push({path,content:'',version:0,loaded:true,asset});if((data??[]).length<500)break;}
+  return rows.sort((a,b)=>a.path.localeCompare(b.path));
+}
+export async function readBookDocument(projectId: string, path: string): Promise<BookDocumentRow> {
+  const {data,error}=await supabase.from('bookkit_documents').select('path,content,version,revision_id').eq('project_id',projectId).eq('path',path).maybeSingle();
+  if(error)throw error;
+  if(data)return {...data,loaded:true};
+  const {data:asset,error:assetError}=await supabase.from('bookkit_assets').select('size_bytes,sha256,chunks,unix_mode,is_directory').eq('project_id',projectId).eq('path',path).single();if(assetError)throw assetError;return {path,content:'',version:0,loaded:true,asset};
+}
+export async function saveBookDocument(projectId: string, path: string, content: string, version: number | null): Promise<BookDocumentRow> {
+  const query = version === null
+    ? supabase.from('bookkit_documents').insert({project_id:projectId,path,content,source_sha256: 'new-human-document'})
+    : supabase.from('bookkit_documents').update({content}).eq('project_id',projectId).eq('path',path).eq('version',version);
+  const {data,error} = await query.select('path,content,version,revision_id').maybeSingle();
+  if(error) throw error;
+  if(!data) throw new Error('This file changed in another session. Reload it before saving; your draft is still here.');
+  return data;
+}
+
+export async function acceptProjectInvitations(): Promise<void> {
+ const {error}=await supabase.rpc('accept_project_invitations');if(error)throw error;
+}
+export async function requestSignInEmail(email: string): Promise<void> {
+ const res=await fetch('/api/sign-in-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.trim()})});
+ const body=await res.json().catch(()=>null);
+ if(!res.ok)throw new Error(body?.error??'Could not send a sign-in link. Use your password instead.');
+}
+
+export async function verifySignInCode(email: string, token: string): Promise<void> {
+ const {error}=await supabase.auth.verifyOtp({email:email.trim(),token:token.trim(),type:'email'});if(error)throw error;
+}
+export async function updateProjectMemberRole(projectId: string, userId: string, role: 'coauthor'|'editor'|'viewer'): Promise<void> {
+ const pending=userId.startsWith('invitation:');
+ const {error}=await supabase.from(pending?'project_invitations':'project_members').update({role}).eq('project_id',projectId).eq(pending?'id':'user_id',pending?userId.slice(11):userId);
+ if(error)throw error;
+}
+
+export async function downloadBookkitArchive(projectId:string,name:string,onProgress:(message:string)=>void):Promise<void>{
+ const suggestedName=name.toLowerCase().replace(/[^a-z0-9-]+/g,'-')+'.zip';
+ const picker=(window as any).showSaveFilePicker;
+ // Invoke the picker while the click still has transient user activation.
+ const handle=picker?await picker({suggestedName,types:[{description:'Bookkit archive',accept:{'application/zip':['.zip']}}]}):null;
+ const {archiveManifest,writeBookkitArchive}=await import('./bookkit-archive');
+ const files=await archiveManifest(supabase,projectId);
+ const totalBytes=files.reduce((n,f)=>n+f.size_bytes,0);
+ if(!handle&&totalBytes>128*1024*1024)throw new Error('This large archive needs direct-to-disk saving. Open bookkit in Chrome or Edge to export it.');
+ let destination:WritableStream<Uint8Array>;
+ const chunks:Uint8Array<ArrayBuffer>[]=[];
+ if(handle)destination=await handle.createWritable();
+ else destination=new WritableStream({write(chunk){chunks.push(new Uint8Array(chunk));}});
+ await writeBookkitArchive(supabase,projectId,files,destination,(path,done,total)=>onProgress(path?`Exporting ${done+1}/${total}: ${path}`:'Export complete.'));
+ if(!handle){const url=URL.createObjectURL(new Blob(chunks,{type:'application/zip'}));const link=document.createElement('a');link.href=url;link.download=suggestedName;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+}
+
+export async function downloadBookAsset(projectId:string,doc:BookDocumentRow):Promise<void>{
+ const asset=doc.asset;if(!asset||asset.is_directory)return;
+ const picker=(window as any).showSaveFilePicker;
+ if(!picker&&asset.size_bytes>128*1024*1024)throw new Error('Use Chrome or Edge to save this large attachment directly to disk.');
+ const handle=picker?await picker({suggestedName:doc.path.split('/').pop()}):null;
+ const writer=handle?await handle.createWritable():null;const parts:Uint8Array[]=[];
+ try{for(const chunk of asset.chunks){const {data,error}=await supabase.storage.from('bookkit-assets').download(projectId+'/'+chunk.sha256);if(error)throw error;const bytes=new Uint8Array(await data.arrayBuffer());const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(v=>v.toString(16).padStart(2,'0')).join('');if(bytes.length!==chunk.size||hash!==chunk.sha256)throw new Error('Attachment verification failed.');if(writer)await writer.write(bytes);else parts.push(bytes);}if(writer)await writer.close();else{const url=URL.createObjectURL(new Blob(parts as BlobPart[]));const a=document.createElement('a');a.href=url;a.download=doc.path.split('/').pop()!;a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}}catch(e){if(writer)await writer.abort();throw e;}
+}
+
+// ────────────────────────────────────────────────────────────
+// New books start as a clean Bookkit structure
+// ────────────────────────────────────────────────────────────
+
+export function newBookFiles(title: string, author: string, today = new Date().toISOString().slice(0, 10)): Record<string, string> {
+  const slug = title.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
+  const q = (s: string) => JSON.stringify(s);
+  const checked = `---\nchecked: ${today}\n---\n\n`;
+  return {
+    'book.yaml': `slug: ${slug}\ntitle: ${q(title)}\nauthor: ${q(author)}\nlanguage: en-US\n\nai_policy: human-authored\n\ncompanion:\n  standard: 1\n\nmanuscript:\n  dir: manuscript\n  layout: flat\n  scenes: false\n  front_matter:\n    required: [chapter, title, status]\n\npublication:\n  formats: [docx, epub, pdf]\n  title_page: true\n`,
+    'README.md': `# ${title}\n\nA book by ${author || 'the author'}, written in Bookkit.\n`,
+    'manuscript/01-chapter-one.md': `---\nchapter: 1\ntitle: "Chapter One"\nstatus: drafting\n---\n\n# Chapter 1\n\n`,
+    'bible/book-on-one-page.md': `${checked}# The book on one page\n\nWhat happens, start to finish, in about 250 words.\n\n## Dramatic question\n\n## Shape\n\n## What the book is about\n`,
+    'bible/characters.md': `${checked}# Characters\n\nEveryone who matters, as the chapters have them.\n`,
+    'bible/places.md': `${checked}# Places\n\nSettings, routes and rooms, in words.\n`,
+    'bible/canon.md': `${checked}# Canon\n\nHard facts, each anchored to the chapter that establishes it.\n`,
+    'bible/timeline.md': `${checked}# Timeline\n\nEvents in story order.\n`,
+    'outline/chapters.md': `${checked}# Chapters\n\n## 1. Chapter One\n\n**Purpose:** \n`,
+    'outline/open-questions.md': `${checked}# Open questions\n\nOnly what is still undecided.\n`,
+    'craft/style-guide.md': `${checked}# Style guide\n\n| Decision | Choice |\n|---|---|\n| Spelling | American |\n| Tense | past |\n| Point of view | |\n`,
+  };
+}
+
+export async function createBook(title: string, author: string): Promise<string> {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+  const { data: project, error } = await supabase.from('projects')
+    .insert({ owner_id: user.id, name: title, brief_title: title, bookkit_slug: 'new/' + crypto.randomUUID(), bookkit_import_complete: true })
+    .select('id').single();
+  if (error || !project) throw error ?? new Error('Could not create the book');
+  const projectId = project.id as string;
+  try {
+    const must = async (q: PromiseLike<{ error: any }>) => { const { error } = await q; if (error) throw error; };
+    await must(supabase.from('project_members').insert({ project_id: projectId, user_id: user.id, role: 'owner', accepted_at: new Date().toISOString() }));
+    await must(supabase.from('project_settings').insert({ project_id: projectId }));
+    await must(supabase.from('llm_settings').insert({ project_id: projectId }));
+    await must(supabase.from('export_configs').insert({ project_id: projectId, author }));
+    const rows = Object.entries(newBookFiles(title, author)).map(([path, content]) => ({ project_id: projectId, path, content, source_sha256: 'new-human-document' }));
+    await must(supabase.from('bookkit_documents').insert(rows));
+    return projectId;
+  } catch (e) {
+    await supabase.from('projects').delete().eq('id', projectId);
+    throw e;
+  }
+}
+
+/** Apply a planned chapter reorder: snapshot first, write, delete, and restore the snapshot if anything fails. */
+export async function applyBookReorder(
+  projectId: string,
+  plan: { writes: Array<{ path: string; content: string }>; deletes: string[]; moves: Array<{ from: string; to: string }> },
+  versions: Map<string, number>,
+  onProgress?: (message: string) => void,
+): Promise<void> {
+  const moved = plan.moves.map(m => m.from);
+  if (moved.length) {
+    const [threads, suggestions] = await Promise.all([
+      supabase.from('bookkit_threads').select('path').eq('project_id', projectId).is('resolved_at', null).in('path', moved),
+      supabase.from('bookkit_suggestions').select('path').eq('project_id', projectId).eq('status', 'pending').in('path', moved),
+    ]);
+    const open = (threads.data?.length ?? 0) + (suggestions.data?.length ?? 0);
+    if (open) throw new Error(`${open} open comment${open === 1 ? '' : 's'} or suggestion${open === 1 ? '' : 's'} belong to chapters that would move. Resolve them first so they don’t lose their place.`);
+  }
+  onProgress?.('Saving a snapshot first…');
+  const { data: snapshotId, error: snapError } = await supabase.rpc('capture_bookkit_snapshot', { p_project_id: projectId, p_message: 'Before reordering chapters' });
+  if (snapError) throw snapError;
+  try {
+    let done = 0;
+    for (const w of plan.writes) {
+      onProgress?.(`Updating ${++done} of ${plan.writes.length}…`);
+      await saveBookDocument(projectId, w.path, w.content, versions.get(w.path) ?? null);
+    }
+    if (plan.deletes.length) {
+      const { error } = await supabase.from('bookkit_documents').delete().eq('project_id', projectId).in('path', plan.deletes);
+      if (error) throw error;
+    }
+  } catch (e) {
+    onProgress?.('Something went wrong; restoring the snapshot…');
+    const { error } = await supabase.rpc('restore_bookkit_snapshot', { p_project_id: projectId, p_snapshot_id: snapshotId });
+    if (error) throw new Error(`Reordering failed (${(e as Error).message}) and the automatic restore also failed (${error.message}). Restore “Before reordering chapters” from History.`);
+    throw new Error(`Reordering failed and the book was restored: ${(e as Error).message}`);
+  }
+}
+
+/** A one-time sign-in link for an invited collaborator (the owner sends it; no email is sent by Bookkit). */
+export async function emailInvite(projectId: string, email: string): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) throw new Error('Sign in first.');
+  const res = await fetch('/api/invite-link', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.session.access_token }, body: JSON.stringify({ projectId, email, send: true }) });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.sent) throw new Error(body?.error ?? 'Could not send the invitation.');
+}
+
+export async function createInviteLink(projectId: string, email: string): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) throw new Error('Sign in first.');
+  const res = await fetch('/api/invite-link', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.session.access_token }, body: JSON.stringify({ projectId, email }) });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.link) throw new Error(body?.error ?? 'Could not create a sign-in link.');
+  return body.link;
+}
+
+export async function setAccountPassword(password: string): Promise<void> {
+  if (password.length < 10) throw new Error('Use at least 10 characters.');
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
 }

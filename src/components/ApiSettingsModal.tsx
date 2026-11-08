@@ -1,207 +1,88 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
-import { fetchProviderModels, testProviderConnection, type ProviderModelOption } from "../lib/llm-service";
+import { fetchProviderModels, INCLUDED_DEFAULT_MODEL, type ProviderModelOption } from "../lib/llm-service";
+import type { LlmSettings } from "../lib/local-config";
 
-type ProviderId = "anthropic" | "openai";
+type ProviderId = LlmSettings["selectedProvider"];
 
-interface ProviderUiState {
-  status: string;
-  testing: boolean;
-  models: ProviderModelOption[];
-}
+const INCLUDED: ProviderModelOption[] = [
+  { id: "@cf/moonshotai/kimi-k2.6", label: "Kimi K2.6" },
+  { id: "@cf/zai-org/glm-5.3", label: "GLM 5.3" },
+  { id: "@cf/deepseek-ai/deepseek-v4-pro-0813", label: "DeepSeek V4 Pro" },
+  { id: "@cf/openai/gpt-oss-120b", label: "gpt-oss 120B" },
+];
 
-const INITIAL_PROVIDER_STATE: ProviderUiState = {
-  status: "Not tested",
-  testing: false,
-  models: [],
-};
-
+/** Choose who answers the assistant: the model included with Bookkit, or your own Anthropic / OpenAI key. */
 export function ApiSettingsModal({ onClose }: { onClose: () => void }) {
-  const llmSettings = useProjectStore((s) => s.llmSettings);
-  const updateLlmSettings = useProjectStore((s) => s.updateLlmSettings);
-  const [providerState, setProviderState] = useState<Record<ProviderId, ProviderUiState>>({
-    anthropic: { ...INITIAL_PROVIDER_STATE },
-    openai: { ...INITIAL_PROVIDER_STATE },
-  });
+  const llm = useProjectStore(s => s.llmSettings);
+  const update = useProjectStore(s => s.updateLlmSettings);
+  const [models, setModels] = useState<Record<"anthropic" | "openai", ProviderModelOption[]>>({ anthropic: [], openai: [] });
+  const [status, setStatus] = useState<Record<"anthropic" | "openai", string>>({ anthropic: "", openai: "" });
+  const [testing, setTesting] = useState<"" | "anthropic" | "openai">("");
+  const provider: ProviderId = llm.selectedProvider;
 
-  const activeProvider = llmSettings.selectedProvider;
-  const activeModels = providerState[activeProvider].models;
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [onClose]);
 
-  const selectedModelExists = useMemo(
-    () => activeModels.some((model) => model.id === llmSettings.selectedModel),
-    [activeModels, llmSettings.selectedModel]
+  async function test(p: "anthropic" | "openai") {
+    setTesting(p);
+    setStatus(s => ({ ...s, [p]: "Checking key…" }));
+    try {
+      const list = await fetchProviderModels(p, llm);
+      setModels(m => ({ ...m, [p]: list }));
+      setStatus(s => ({ ...s, [p]: list.length ? `Connected · ${list.length} models` : "Connected, but no text models were returned" }));
+      if (list.length) await update({ selectedProvider: p, selectedModel: list.some(x => x.id === llm.selectedModel) ? llm.selectedModel : list[0].id });
+    } catch (e) {
+      setStatus(s => ({ ...s, [p]: (e as Error).message }));
+    } finally { setTesting(""); }
+  }
+
+  const card = (id: ProviderId, title: string, body: React.ReactNode) => (
+    <section className={`ai-option ${provider === id ? "on" : ""}`}>
+      <label className="ai-option-head">
+        <input type="radio" name="ai-provider" checked={provider === id} onChange={() => void update(id === "bookkit" ? { selectedProvider: id, selectedModel: INCLUDED_DEFAULT_MODEL } : { selectedProvider: id, selectedModel: models[id]?.[0]?.id ?? llm.selectedModel })} />
+        <span>{title}</span>
+      </label>
+      <div className="ai-option-body">{body}</div>
+    </section>
   );
 
-  async function testProvider(provider: ProviderId): Promise<void> {
-    setProviderState((prev) => ({
-      ...prev,
-      [provider]: { ...prev[provider], testing: true, status: "Testing..." },
-    }));
-
-    const latestSettings = useProjectStore.getState().llmSettings;
-    const result = await testProviderConnection(provider, latestSettings);
-
-    if (!result.ok) {
-      setProviderState((prev) => ({
-        ...prev,
-        [provider]: {
-          ...prev[provider],
-          testing: false,
-          status: result.message,
-          models: [],
-        },
-      }));
-      return;
-    }
-
-    try {
-      const models = await fetchProviderModels(provider, latestSettings);
-      setProviderState((prev) => ({
-        ...prev,
-        [provider]: {
-          ...prev[provider],
-          testing: false,
-          status: `Connected (${models.length} models found)`,
-          models,
-        },
-      }));
-
-      const hasSelection = models.some((model) => model.id === latestSettings.selectedModel);
-      if (!hasSelection && models[0]) {
-        await updateLlmSettings({
-          selectedProvider: provider,
-          selectedModel: models[0].id,
-        });
-      }
-    } catch (error: any) {
-      setProviderState((prev) => ({
-        ...prev,
-        [provider]: {
-          ...prev[provider],
-          testing: false,
-          status: error?.message || `${provider} connection failed`,
-          models: [],
-        },
-      }));
-    }
-  }
-
-  async function selectProvider(provider: ProviderId): Promise<void> {
-    const models = providerState[provider].models;
-    const nextModel = models[0]?.id ?? llmSettings.selectedModel;
-    await updateLlmSettings({
-      selectedProvider: provider,
-      selectedModel: nextModel,
-    });
-  }
+  const keyCard = (id: "anthropic" | "openai", name: string, placeholder: string) => {
+    const key = id === "anthropic" ? llm.anthropicKey : llm.openaiKey;
+    return card(id, `Your ${name} key`, <>
+      <div className="ai-key-row">
+        <input className="field-input" type="password" autoComplete="off" placeholder={placeholder} value={key ?? ""} onChange={e => void update(id === "anthropic" ? { anthropicKey: e.target.value } : { openaiKey: e.target.value })} />
+        <button className="btn btn-sm" disabled={!key || testing === id} onClick={() => void test(id)}>{testing === id ? "Checking…" : "Connect"}</button>
+      </div>
+      {status[id] && <div className="ai-status">{status[id]}</div>}
+      {provider === id && models[id].length > 0 && (
+        <select className="field-input" value={llm.selectedModel} onChange={e => void update({ selectedModel: e.target.value })}>
+          {models[id].map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+      )}
+    </>);
+  };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900 }}>
-        <div className="modal-header">
-          <div className="modal-title">API / LLM Settings</div>
-          <div className="modal-actions">
-            <button className="btn btn-sm" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </div>
-        <div className="modal-body">
-          <div className="provider-grid">
-            <section className={`provider-card ${activeProvider === "anthropic" ? "is-active" : ""}`}>
-              <div className="provider-header">
-                <div className="provider-title-wrap">
-                  <label className="form-label">Anthropic API</label>
-                  <span className="provider-status">{providerState.anthropic.status}</span>
-                </div>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => void testProvider("anthropic")}
-                  disabled={providerState.anthropic.testing}
-                >
-                  {providerState.anthropic.testing ? "Testing..." : "Test Anthropic"}
-                </button>
-              </div>
-              <input
-                className="form-input"
-                type="password"
-                placeholder="sk-ant-..."
-                value={llmSettings.anthropicKey ?? ""}
-                onChange={(e) => void updateLlmSettings({ anthropicKey: e.target.value })}
-              />
-              <button
-                className={`btn btn-sm ${activeProvider === "anthropic" ? "btn-primary" : ""}`}
-                onClick={() => void selectProvider("anthropic")}
-                disabled={!providerState.anthropic.models.length}
-              >
-                Use Anthropic
-              </button>
-            </section>
-
-            <section className={`provider-card ${activeProvider === "openai" ? "is-active" : ""}`}>
-              <div className="provider-header">
-                <div className="provider-title-wrap">
-                  <label className="form-label">OpenAI API</label>
-                  <span className="provider-status">{providerState.openai.status}</span>
-                </div>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => void testProvider("openai")}
-                  disabled={providerState.openai.testing}
-                >
-                  {providerState.openai.testing ? "Testing..." : "Test OpenAI"}
-                </button>
-              </div>
-              <input
-                className="form-input"
-                type="password"
-                placeholder="sk-proj-..."
-                value={llmSettings.openaiKey ?? ""}
-                onChange={(e) => void updateLlmSettings({ openaiKey: e.target.value })}
-              />
-              <button
-                className={`btn btn-sm ${activeProvider === "openai" ? "btn-primary" : ""}`}
-                onClick={() => void selectProvider("openai")}
-                disabled={!providerState.openai.models.length}
-              >
-                Use OpenAI
-              </button>
-            </section>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Active provider</label>
-            <div className="provider-pill">{activeProvider === "anthropic" ? "Anthropic" : "OpenAI"}</div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Model ({activeProvider})</label>
-            {!activeModels.length ? (
-              <div className="text-muted">Test {activeProvider} to load available models for this key.</div>
-            ) : (
-              <select
-                className="form-select"
-                value={selectedModelExists ? llmSettings.selectedModel : activeModels[0].id}
-                onChange={(e) =>
-                  void updateLlmSettings({
-                    selectedProvider: activeProvider,
-                    selectedModel: e.target.value,
-                  })
-                }
-              >
-                {activeModels.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div className="text-muted">
-            Model options come directly from each provider after a successful connection test.
-          </div>
-        </div>
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="dialog ai-dialog" role="dialog" aria-label="AI assistant">
+        <h2>AI assistant</h2>
+        <p className="dialog-sub">The assistant gives editorial notes and helps keep plan and bible pages up to date. It never writes your prose.</p>
+        {card("bookkit", "Included with Bookkit", <>
+          <p className="settings-hint">Works right away, no key needed. Runs on Cloudflare Workers AI.</p>
+          {provider === "bookkit" && (
+            <select className="field-input" value={INCLUDED.some(m => m.id === llm.selectedModel) ? llm.selectedModel : INCLUDED_DEFAULT_MODEL} onChange={e => void update({ selectedModel: e.target.value })}>
+              {INCLUDED.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          )}
+        </>)}
+        {keyCard("anthropic", "Anthropic", "sk-ant-…")}
+        {keyCard("openai", "OpenAI", "sk-proj-…")}
+        <p className="settings-hint">Keys stay in this browser and are sent only to your provider, through Bookkit’s server.</p>
+        <div className="dialog-actions"><button className="btn btn-primary" onClick={onClose}>Done</button></div>
       </div>
     </div>
   );

@@ -1,0 +1,4 @@
+import {expect,it} from 'vitest';import {mergeBookText} from './bookkit-merge';
+it('merges two concurrent edits without losing either',()=>{expect(mergeBookText('First line.\nSecond line.','First line revised.\nSecond line.','First line.\nSecond line revised.')).toBe('First line revised.\nSecond line revised.');});
+it('refuses ambiguous concurrent inserts and overlapping replacements',()=>{expect(()=>mergeBookText('Text','Text A','Text B')).toThrow('same passage');expect(()=>mergeBookText('one two','one three','one four')).toThrow('same passage');});
+it('deduplicates identical saves and retains unicode',()=>{expect(mergeBookText('é😀 word','é😀 new word','é😀 new word')).toBe('é😀 new word');expect(mergeBookText('😀 start\nlast','😀 human start\nlast','😀 start\nlast!')).toBe('😀 human start\nlast!');});

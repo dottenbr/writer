@@ -307,7 +307,7 @@ export function Inspiration() {
   const updateInspirationItem = useProjectStore((s) => s.updateInspirationItem);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projectId = currentProjectId ?? "";
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [filterTag, setFilterTag] = useState<string | null>(null);

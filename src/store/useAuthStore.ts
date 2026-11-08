@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   signIn as sbSignIn,
+  acceptProjectInvitations,
   signOut as sbSignOut,
   getCurrentUser,
 } from "../lib/supabase-service";
@@ -24,6 +25,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     await sbSignIn(email, password);
     const user = await getCurrentUser();
     if (user) {
+      await acceptProjectInvitations();
       set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
       // Dynamic import to break circular dependency (useProjectStore imports useAuthStore)
       const { useProjectStore } = await import("./useProjectStore");
@@ -47,6 +49,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     // Reset project state
     useProjectStore.setState({
       projects: [],
+      projectCatalog: [],
       currentProjectId: null,
       realtimeUnsubscribe: null,
     });
@@ -55,6 +58,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
   checkAuth: async () => {
     const user = await getCurrentUser();
     if (user) {
+      await acceptProjectInvitations();
       set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
       return true;
     }

@@ -1,0 +1,456 @@
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useProjectStore } from "../../store/useProjectStore";
+import { useAuthStore } from "../../store/useAuthStore";
+import { prefs, useBookStore, writePrefs, type View } from "../../store/useBookStore";
+import { useEditorBus } from "./editorBus";
+import { Navigator } from "./Navigator";
+import { ManuscriptView } from "./ManuscriptView";
+import { CompanionView } from "./CompanionView";
+import { ContextPanel } from "./ContextPanel";
+import { Toolbar } from "./Toolbar";
+import { BibleBoard, PlanBoard } from "./Boards";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { chapterForPath, Icon, initials, KIND_LABEL, useAccess } from "./common";
+import { anchorNumbers, nextChapterPath } from "../../lib/book-model";
+import { saveBookDocument, createBook, setAccountPassword } from "../../lib/supabase-service";
+
+const BookSettings = lazy(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
+const Inspiration = lazy(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
+import { BriefPage } from "./BriefPage";
+
+export function useTheme() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => prefs().theme ?? (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    writePrefs({ theme });
+  }, [theme]);
+  return [theme, setTheme] as const;
+}
+
+function BookSwitcher() {
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const currentId = useProjectStore(s => s.currentProjectId);
+  const switchProject = useProjectStore(s => s.switchProject);
+  const title = useBookStore(s => s.model?.title);
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const current = catalog.find(p => p.id === currentId);
+  return (
+    <div className="book-switcher" ref={ref}>
+      <button className="book-switcher-btn" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="book-switcher-name">{title ?? current?.name ?? "Choose a book"}</span>
+        <Icon name="down" size={14} />
+      </button>
+      {open && (
+        <div className="menu book-menu">
+          <div className="menu-label">Your books</div>
+          {catalog.map(p => (
+            <button key={p.id} className={`menu-item ${p.id === currentId ? "current" : ""}`} onClick={() => { setOpen(false); if (p.id !== currentId) void switchProject(p.id); }}>
+              <Icon name="book" size={15} />
+              <span className="menu-item-text">{p.name}</span>
+              {p.role !== "owner" && <span className="menu-meta">{p.role}</span>}
+              {p.id === currentId && <Icon name="check" size={14} />}
+            </button>
+          ))}
+          <div className="menu-sep" />
+          <button className="menu-item" onClick={() => { setOpen(false); setCreating(true); }}><Icon name="plus" size={15} /> New book</button>
+        </div>
+      )}
+      {creating && <NewBookDialog onClose={() => setCreating(false)} />}
+    </div>
+  );
+}
+
+export function NewBookDialog({ onClose }: { onClose: () => void }) {
+  const switchProject = useProjectStore(s => s.switchProject);
+  const refreshCatalog = useProjectStore(s => s.loadFromStorage);
+  const [title, setTitle] = useState("");
+  const [author, setAuthor] = useState(() => prefs().authorName ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="dialog" onSubmit={async e => {
+        e.preventDefault();
+        if (!title.trim()) return;
+        setBusy(true); setError("");
+        try {
+          writePrefs({ authorName: author.trim() });
+          const id = await createBook(title.trim(), author.trim());
+          await refreshCatalog();
+          await switchProject(id);
+          onClose();
+        } catch (err) { setError((err as Error).message); setBusy(false); }
+      }}>
+        <h2>Start a new book</h2>
+        <p className="dialog-sub">You’ll get a manuscript with a first chapter, a story bible, a plan and a style guide, all linked together.</p>
+        <label className="field">Title<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="The working title" /></label>
+        <label className="field">Author name<input value={author} onChange={e => setAuthor(e.target.value)} placeholder="As it should appear on the cover" /></label>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !title.trim()}>{busy ? "Creating…" : "Create book"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function NewChapterDialog({ onClose }: { onClose: () => void }) {
+  const model = useBookStore(s => s.model)!;
+  const files = useBookStore(s => s.files);
+  const upsert = useBookStore(s => s.upsert);
+  const go = useBookStore(s => s.go);
+  const { projectId } = useAccess();
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function create() {
+    if (!projectId || !title.trim()) return;
+    setBusy(true); setError("");
+    try {
+      const last = model.chapters[model.chapters.length - 1];
+      let { path, number } = nextChapterPath(model, title);
+      const lastPath = last?.authorPath ?? last?.referencePath;
+      if (model.config?.manuscript?.layout === "parts" && lastPath) {
+        const dir = lastPath.split("/").slice(-2, -1)[0];
+        path = `${model.manuscriptDir}/${dir}/${path.split("/").pop()}`;
+      }
+      const lastMeta = lastPath ? (files.find(f => f.path === lastPath)?.content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "") : "";
+      const carry = lastMeta.split("\n").filter(l => /^(part|part_title|kind):/.test(l));
+      const status = model.hasDraft ? "drafting" : "drafting";
+      const content = `---\nchapter: ${number}\ntitle: ${JSON.stringify(title.trim())}\n${carry.map(l => l + "\n").join("")}status: ${status}\n---\n\n# Chapter ${number}\n\n`;
+      const row = await saveBookDocument(projectId, path, content, null);
+      upsert({ ...row, loaded: true });
+      const yaml = files.find(f => f.path === "book.yaml");
+      if (yaml && /^\s+chapters:\s*\d+\s*$/m.test(yaml.content)) {
+        try { upsert({ ...(await saveBookDocument(projectId, "book.yaml", yaml.content.replace(/^(\s+chapters:\s*)\d+/m, `$1${number}`), yaml.version)), loaded: true }); } catch { /* count stays for bin/check to report */ }
+      }
+      setTimeout(() => go(path), 450);
+      onClose();
+    } catch (e) { setError((e as Error).message); setBusy(false); }
+  }
+  return (
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="dialog" onSubmit={e => { e.preventDefault(); void create(); }}>
+        <h2>New chapter</h2>
+        <p className="dialog-sub">Chapter {(model.chapters[model.chapters.length - 1]?.number ?? 0) + 1} will be added at the end of the book.</p>
+        <label className="field">Title<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Chapter title" /></label>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !title.trim()}>{busy ? "Adding…" : "Add chapter"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+interface PaletteItem { id: string; label: string; hint: string; icon: string; run: () => void }
+
+function CommandPalette({ onClose }: { onClose: () => void }) {
+  const model = useBookStore(s => s.model)!;
+  const go = useBookStore(s => s.go);
+  const setView = useBookStore(s => s.setView);
+  const selectEntity = useBookStore(s => s.selectEntity);
+  const [q, setQ] = useState("");
+  const [index, setIndex] = useState(0);
+  const items = useMemo<PaletteItem[]>(() => [
+    { id: "v:write", label: "Manuscript", hint: "View", icon: "pen", run: () => go("") },
+    { id: "v:plan", label: "Plan board", hint: "View", icon: "grid", run: () => setView("plan") },
+    { id: "v:bible", label: "Story bible", hint: "View", icon: "person", run: () => setView("bible") },
+    { id: "v:brief", label: "Brief", hint: "Page", icon: "flag", run: () => go("@brief") },
+    { id: "v:insp", label: "Inspiration board", hint: "View", icon: "image", run: () => setView("inspiration") },
+    { id: "v:settings", label: "Book settings, sharing & history", hint: "View", icon: "gear", run: () => setView("settings") },
+    ...model.chapters.map(c => ({ id: "c" + c.number, label: c.label, hint: "Chapter", icon: "file", run: () => go(c.authorPath ?? c.currentPath) })),
+    ...model.entities.map(e => ({ id: e.id, label: e.name, hint: KIND_LABEL[e.kind], icon: e.kind === "place" ? "pin" : "person", run: () => { go(e.path, { anchor: e.slug }); selectEntity(e.id); } })),
+    ...model.companions.filter(d => d.group !== "source" || d.path.endsWith(".md")).map(d => ({ id: d.path, label: d.title, hint: d.group === "research" ? "Research" : "Page", icon: "file", run: () => go(d.path) })),
+  ], [model, go, setView, selectEntity]);
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const results = items.filter(i => words.every(w => (i.label + " " + i.hint).toLowerCase().includes(w))).slice(0, 40);
+  useEffect(() => setIndex(0), [q]);
+  return (
+    <div className="dialog-backdrop palette-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="palette" role="dialog" aria-label="Jump to">
+        <div className="palette-input"><Icon name="search" size={16} />
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Jump to a chapter, character, place or page…"
+            onKeyDown={e => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setIndex(i => Math.min(i + 1, results.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setIndex(i => Math.max(i - 1, 0)); }
+              else if (e.key === "Enter" && results[index]) { results[index].run(); onClose(); }
+              else if (e.key === "Escape") onClose();
+            }} />
+        </div>
+        <div className="palette-list">
+          {results.map((r, i) => (
+            <button key={r.id} className={`palette-item ${i === index ? "on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => { r.run(); onClose(); }}>
+              <Icon name={r.icon} size={15} /><span className="palette-label">{r.label}</span><span className="palette-hint">{r.hint}</span>
+            </button>
+          ))}
+          {!results.length && <div className="palette-empty">Nothing matches “{q}”.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HoverCard() {
+  const model = useBookStore(s => s.model);
+  const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    const over = (e: MouseEvent) => {
+      const el = (e.target as HTMLElement).closest?.("[data-entity]") as HTMLElement | null;
+      clearTimeout(timer.current);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        timer.current = setTimeout(() => setHover({ id: el.dataset.entity!, x: r.left, y: r.bottom }), 350);
+      } else if (!(e.target as HTMLElement).closest?.(".hover-card")) timer.current = setTimeout(() => setHover(null), 150);
+    };
+    document.addEventListener("mouseover", over);
+    return () => { document.removeEventListener("mouseover", over); clearTimeout(timer.current); };
+  }, []);
+  const entity = hover && model?.entities.find(e => e.id === hover.id);
+  if (!entity || !hover) return null;
+  const left = Math.min(hover.x, window.innerWidth - 340);
+  const top = hover.y + 8 + 200 > window.innerHeight ? hover.y - 210 : hover.y + 8;
+  return (
+    <div className="hover-card" style={{ left, top }}>
+      <div className="hover-card-kind">{KIND_LABEL[entity.kind]}</div>
+      <div className="hover-card-name">{entity.name}</div>
+      <p>{entity.summary.replace(/^Role:\s*/i, "") || "No description yet."}</p>
+      <div className="hover-card-hint">Click to open in the side panel</div>
+    </div>
+  );
+}
+
+function Presence() {
+  const editors = useProjectStore(s => s.activeEditors);
+  const userId = useAuthStore(s => s.userId);
+  const model = useBookStore(s => s.model);
+  const others = editors.filter(e => e.userId !== userId);
+  const unique = [...new Map(others.map(e => [e.userId, e])).values()];
+  if (!unique.length) return null;
+  return (
+    <div className="presence" aria-label="Also here">
+      {unique.slice(0, 4).map(e => {
+        const ch = model ? chapterForPath(model.chapters, e.activeChapterId ?? "") : undefined;
+        return <span key={e.userId} className="avatar presence-avatar" title={`${e.displayName}${ch ? ` · in ${ch.label}` : ""}`}>{initials(e.displayName)}</span>;
+      })}
+    </div>
+  );
+}
+
+function PasswordDialog({ onClose }: { onClose: () => void }) {
+  const [value, setValue] = useState("");
+  const [state, setState] = useState<"" | "saving" | "done">("");
+  const [error, setError] = useState("");
+  return (
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="dialog" onSubmit={async e => {
+        e.preventDefault(); setError(""); setState("saving");
+        try { await setAccountPassword(value); setState("done"); } catch (err) { setError((err as Error).message); setState(""); }
+      }}>
+        <h2>Set a password</h2>
+        <p className="dialog-sub">Use it to sign in next time with your email and password, instead of a sign-in link.</p>
+        <label className="field">New password<input type="password" autoComplete="new-password" autoFocus value={value} onChange={e => setValue(e.target.value)} minLength={10} /></label>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        {state === "done" && <div className="save-notice" role="status">Password saved.</div>}
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>{state === "done" ? "Close" : "Cancel"}</button>
+          {state !== "done" && <button type="submit" className="btn btn-primary" disabled={state === "saving" || value.length < 10}>{state === "saving" ? "Saving…" : "Save password"}</button>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
+  const email = useAuthStore(s => s.userEmail) ?? "";
+  const signOut = useAuthStore(s => s.signOut);
+  const setShowApiSettings = useProjectStore(s => s.setShowApiSettings);
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return (
+    <div className="user-menu" ref={ref}>
+      {password && <PasswordDialog onClose={() => setPassword(false)} />}
+      <button className="avatar user-avatar" onClick={() => setOpen(!open)} aria-label="Account" title={email}>{initials(email)}</button>
+      {open && (
+        <div className="menu menu-right">
+          <div className="menu-label">{email}</div>
+          <button className="menu-item" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} size={15} /> {theme === "dark" ? "Light" : "Dark"} appearance</button>
+          <button className="menu-item" onClick={() => { setOpen(false); useBookStore.getState().setView("settings"); }}><Icon name="users" size={15} /> Book settings & sharing</button>
+          <button className="menu-item" onClick={() => { setOpen(false); setShowApiSettings(true); }}><Icon name="sparkle" size={15} /> AI assistant</button>
+          <button className="menu-item" onClick={() => { setOpen(false); setPassword(true); }}><Icon name="gear" size={15} /> Set password</button>
+          <div className="menu-sep" />
+          <button className="menu-item" onClick={() => void signOut()}><Icon name="logout" size={15} /> Sign out</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Studio() {
+  const projectId = useProjectStore(s => s.currentProjectId);
+  const load = useBookStore(s => s.load);
+  const status = useBookStore(s => s.status);
+  const error = useBookStore(s => s.error);
+  const model = useBookStore(s => s.model);
+  const view = useBookStore(s => s.view);
+  const setView = useBookStore(s => s.setView);
+  const location = useBookStore(s => s.location);
+  const go = useBookStore(s => s.go);
+  const live = useBookStore(s => s.live);
+  const panelOpen = useBookStore(s => s.panelOpen);
+  const focusMode = useBookStore(s => s.focusMode);
+  const setFocusMode = useBookStore(s => s.setFocusMode);
+  const selectEntity = useBookStore(s => s.selectEntity);
+  const session = useEditorBus(s => s.session);
+  const [palette, setPalette] = useState(false);
+  const [newChapter, setNewChapter] = useState(false);
+  const narrow = () => window.innerWidth <= 1080;
+  const [navOpen, setNavOpenState] = useState(() => (narrow() ? false : prefs().navOpen ?? true));
+  const setNavOpen = (open: boolean) => { setNavOpenState(open); if (!narrow()) writePrefs({ navOpen: open }); };
+  // On small screens the contents and side panel are overlays: close them after navigating.
+  useEffect(() => {
+    if (!narrow()) return;
+    setNavOpenState(false);
+    if (useBookStore.getState().panelOpen) useBookStore.setState({ panelOpen: false });
+  }, [location.nonce]);
+  const [theme, setTheme] = useTheme();
+  const { role } = useAccess();
+
+  useEffect(() => { if (projectId) void load(projectId); }, [projectId, load]);
+  useEffect(() => {
+    if (view !== "write") document.querySelector(".main-scroll")?.scrollTo({ top: 0 });
+  }, [view]);
+
+  // Presence: tell collaborators where you are.
+  useEffect(() => {
+    if (session?.path) useProjectStore.getState().setActiveChapterId(session.path);
+  }, [session?.path]);
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette(p => !p); }
+      if (e.key === "Escape" && focusMode) setFocusMode(false);
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setFocusMode(!focusMode); }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [focusMode, setFocusMode]);
+
+  // Linked text: entity names and chapter anchors navigate.
+  function onClick(e: React.MouseEvent) {
+    const target = e.target as HTMLElement;
+    const entity = target.closest("[data-entity]") as HTMLElement | null;
+    if (entity && !window.getSelection()?.toString()) { selectEntity(entity.dataset.entity!); return; }
+    const link = target.closest(".doc-prose a[href], .md a[href]") as HTMLAnchorElement | null;
+    if (link && model) {
+      const href = link.getAttribute("href") ?? "";
+      const editing = !!target.closest("[contenteditable=true]");
+      if (/^[a-z]+:/i.test(href)) {
+        e.preventDefault();
+        if (!editing || e.metaKey || e.ctrlKey) window.open(href, "_blank", "noopener,noreferrer");
+        return;
+      }
+      e.preventDefault();
+      if (editing && !(e.metaKey || e.ctrlKey)) return;
+      const [file, hash] = href.split("#");
+      const base = location.path.split("/").slice(0, -1);
+      for (const part of file.split("/")) {
+        if (part === "..") base.pop();
+        else if (part && part !== ".") base.push(part);
+      }
+      const resolved = file ? base.join("/") : location.path;
+      const chapter = chapterForPath(model.chapters, resolved);
+      if (chapter || model.companions.some(d => d.path === resolved)) go(resolved, { anchor: hash || undefined });
+      return;
+    }
+    const anchor = target.closest("[data-chapters]") as HTMLElement | null;
+    if (anchor && model && (e.metaKey || e.ctrlKey || !target.closest("[contenteditable=true]"))) {
+      const n = anchorNumbers(anchor.dataset.chapters!)[0];
+      const chapter = model.chapters.find(c => c.number === n);
+      if (!chapter) return;
+      const block = anchor.closest("p,li,td,blockquote") ?? anchor.parentElement;
+      let find: string | undefined;
+      if (block) {
+        const range = document.createRange();
+        range.setStartAfter(anchor);
+        range.setEndAfter(block.lastChild ?? block);
+        find = range.toString().match(/^\s*:?\s*[“"]([^”"]{3,160})[”"]/)?.[1];
+      }
+      go(chapter.authorPath ?? chapter.currentPath, { find });
+    }
+  }
+
+  if (status === "error") return <div className="studio-message"><h2>We couldn’t open this book</h2><p>{error}</p><button className="btn" onClick={() => projectId && void load(projectId)}>Try again</button></div>;
+  if (!model) return <div className="studio-message"><span className="spinner" /> Opening your book…</div>;
+
+  const isChapter = location.path === "" || !!chapterForPath(model.chapters, location.path);
+  const views: Array<{ id: View; label: string; icon: string }> = [
+    { id: "write", label: "Write", icon: "pen" },
+    { id: "plan", label: "Plan", icon: "grid" },
+    { id: "bible", label: "Bible", icon: "person" },
+    { id: "inspiration", label: "Inspiration", icon: "image" },
+  ];
+
+  return (
+    <div className={`studio ${focusMode ? "focus" : ""} ${navOpen ? "" : "nav-closed"} ${panelOpen && view === "write" ? "" : "panel-closed"}`}>
+      <header className="topbar">
+        <div className="topbar-left">
+          <button className="icon-btn" onClick={() => setNavOpen(!navOpen)} aria-label={navOpen ? "Hide contents" : "Show contents"} title="Contents"><Icon name="sidebar" size={18} /></button>
+          <div className="brand"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></div>
+          <span className="topbar-slash">/</span>
+          <BookSwitcher />
+        </div>
+        <nav className="view-switch" aria-label="Views">
+          {views.map(v => (
+            <button key={v.id} className={view === v.id ? "on" : ""} onClick={() => setView(v.id)}><Icon name={v.icon} size={15} /> {v.label}</button>
+          ))}
+        </nav>
+        <div className="topbar-right">
+          <button className="search-trigger" onClick={() => setPalette(true)}><Icon name="search" size={14} /> <span>Jump to…</span> <kbd>⌘K</kbd></button>
+          <span className={`live-dot ${live === "SUBSCRIBED" ? "on" : ""}`} title={live === "SUBSCRIBED" ? "Live: changes from collaborators appear as they save" : "Reconnecting…"} />
+          <Presence />
+          <button className={`btn btn-sm share-btn ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")}><Icon name="users" size={14} /> {role === "owner" ? "Share" : "Book"}</button>
+          <UserMenu theme={theme} setTheme={setTheme} />
+        </div>
+      </header>
+      <div className="studio-body" onClick={onClick}>
+        {view === "write" && navOpen && <Navigator onNewChapter={() => setNewChapter(true)} />}
+        <main className="studio-main">
+          {view === "write" && location.path !== "@brief" && <Toolbar />}
+          <div className="main-scroll">
+            <ErrorBoundary resetKey={`${view}:${location.path}:${location.nonce}`}>
+              {view === "write" && (location.path === "@brief" ? <BriefPage /> : isChapter ? <ManuscriptView /> : <CompanionView />)}
+              {view === "inspiration" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><div className="inspiration-host"><Inspiration /></div></Suspense>}
+              {view === "plan" && <PlanBoard />}
+              {view === "bible" && <BibleBoard />}
+              {view === "settings" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><BookSettings /></Suspense>}
+            </ErrorBoundary>
+          </div>
+        </main>
+        {view === "write" && panelOpen && <ErrorBoundary resetKey={location.path}><ContextPanel /></ErrorBoundary>}
+      </div>
+      {focusMode && <button className="focus-exit" onClick={() => setFocusMode(false)}>Exit focus · Esc</button>}
+      {palette && <CommandPalette onClose={() => setPalette(false)} />}
+      {newChapter && <NewChapterDialog onClose={() => setNewChapter(false)} />}
+      <HoverCard />
+    </div>
+  );
+}

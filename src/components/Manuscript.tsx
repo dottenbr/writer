@@ -358,7 +358,7 @@ export function Manuscript() {
   const aiInlineEditorRef = useRef<HTMLDivElement>(null);
 
   const activeChapter = project?.chapters.find((c) => c.id === activeChapterId);
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
   const activeConflictDetails = activeChapter ? chapterConflictDetails[activeChapter.id] : undefined;
   const hasActiveConflict = activeChapter ? Boolean(chapterConflicts[activeChapter.id]) : false;
   const canEditChapter = canEdit && !hasActiveConflict;
@@ -469,7 +469,7 @@ export function Manuscript() {
         if (event.key === "Tab" && event.shiftKey) {
           event.preventDefault();
           if (aiLocked || !canEditChapter) return true;
-          void runAiOnSelection("Continue this section with one strong paragraph.");
+          void runAiOnSelection("Review the next steps for this scene without writing prose.");
           return true;
         }
         return false;
@@ -540,14 +540,8 @@ export function Manuscript() {
   const acceptAiReview = useCallback(() => {
     if (!aiReviewPayload) return;
     if (aiReviewPayload.kind === "selection-edit") {
-      if (!editor) return;
-      const { selectionFrom, selectionTo, usedSelection } = aiReviewPayload;
-      if (usedSelection) {
-        editor.chain().focus().insertContentAt({ from: selectionFrom, to: selectionTo }, aiReviewAfterDraft).run();
-      } else {
-        editor.chain().focus().insertContent(`\n\n${aiReviewAfterDraft}`).run();
-      }
-      setAiStatusMessage("AI proposal accepted.");
+      // Manuscript text is human-authored; AI output is never an editor mutation.
+      setAiStatusMessage("AI suggestions are advisory only. Revise the manuscript yourself.");
     } else {
       setAskEditorResponse(aiReviewAfterDraft);
       setAiStatusMessage("");
@@ -576,11 +570,11 @@ export function Manuscript() {
       const selectedText = editor.state.doc.textBetween(from, to, "\n");
       const source = selectedText || editor.state.doc.textContent.slice(0, 2000);
       setAiStatusMessage("");
-      setAiBusyLabel("Generating edit...");
+      setAiBusyLabel("Reviewing selection...");
       setAiPhase("running");
       try {
         const output = await completeText(
-          `You are editing fiction prose.\nInstruction: ${instruction}\n\nText:\n${source}\n\nReturn only improved text.`,
+          `Review this human-authored text. Give editorial observations and suggested changes as notes, never replacement prose.\nFocus: ${instruction}\n\nText:\n${source}`,
           llmSettings
         );
         if (!output.trim()) {
@@ -590,13 +584,10 @@ export function Manuscript() {
           return;
         }
         setAiReviewPayload({
-          kind: "selection-edit",
-          title: instruction,
+          kind: "editor-notes",
+          title: "Editorial suggestions",
           beforeText: source,
           afterText: output.trim(),
-          selectionFrom: from,
-          selectionTo: to,
-          usedSelection: Boolean(selectedText),
         });
         setAiOriginalAfterText(output.trim());
         setAiReviewAfterDraft(output.trim());
@@ -818,14 +809,10 @@ Write a thorough editorial review of this chapter. Structure your response with 
   const currentChars = editor?.storage.characterCount.characters() ?? 0;
 
   const slashActions = [
-    { label: "Continue writing", run: () => void runAiOnSelection("Continue writing the scene naturally."), ai: true },
-    { label: "Write next paragraph", run: () => void runAiOnSelection("Write one next paragraph only."), ai: true },
-    { label: "Add scene break", run: () => editor?.chain().focus().insertContent("\n\n## Scene break\n\n").run(), ai: false },
-    { label: "Add dialogue", run: () => void runAiOnSelection("Insert a short dialogue exchange that fits the scene."), ai: true },
-    { label: "Add description", run: () => void runAiOnSelection("Add sensory description while preserving pace."), ai: true },
-    { label: "Rewrite paragraph", run: () => void runAiOnSelection("Rewrite this paragraph for clarity and voice."), ai: true },
-    { label: "Expand paragraph", run: () => void runAiOnSelection("Expand this paragraph with richer detail."), ai: true },
-    { label: "Shorten paragraph", run: () => void runAiOnSelection("Shorten this paragraph while preserving meaning."), ai: true },
+    { label: "Review clarity and voice", run: () => void runAiOnSelection("Identify clarity and voice issues."), ai: true },
+    { label: "Review pacing", run: () => void runAiOnSelection("Identify pacing issues and explain possible changes."), ai: true },
+    { label: "Review continuity", run: () => void runAiOnSelection("Identify possible continuity issues."), ai: true },
+    { label: "Add scene break", run: () => editor?.chain().focus().setHorizontalRule().run(), ai: false },
   ];
 
   return (
@@ -895,13 +882,13 @@ Write a thorough editorial review of this chapter. Structure your response with 
                 <button className="btn btn-sm" onClick={handleAddComment}>
                   Comment
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Expand this selection.")}>
-                  Expand
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Suggest where more detail would help.")}>
+                  Detail notes
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Shorten this selection.")}>
-                  Shorten
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Identify unnecessary words and explain why.")}>
+                  Concision notes
                 </button>
-                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Fix grammar and punctuation only.")}>
+                <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => void runAiOnSelection("Identify grammar and punctuation issues.")}>
                   Grammar
                 </button>
                 <button className="btn btn-sm" disabled={aiLocked || !canEditChapter} onClick={() => setShowSelectionPrompt(true)}>
@@ -1271,9 +1258,9 @@ Write a thorough editorial review of this chapter. Structure your response with 
               <button
                 className="btn w-full"
                 disabled={aiLocked || !canEditChapter}
-                onClick={() => void runAiOnSelection("Polish for rhythm and lyric clarity while preserving voice.")}
+                onClick={() => void runAiOnSelection("Review rhythm and lyric clarity; suggest changes as notes.")}
               >
-                {aiPhase === "running" ? "Generating..." : "Polish / Lyric Pass"}
+                {aiPhase === "running" ? "Reviewing..." : "Rhythm / Lyric Review"}
               </button>
               <button className="btn w-full" onClick={() => void useProjectStore.getState().setActiveTab("bible")}>
                 Refresh Bible
@@ -1576,7 +1563,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                   className="btn btn-primary btn-sm"
                   disabled={aiLocked}
                   onClick={async () => {
-                    await runAiOnSelection(selectionPrompt || "Rewrite this section.");
+                    await runAiOnSelection(selectionPrompt || "Review this section.");
                     setSelectionPrompt("");
                     setShowSelectionPrompt(false);
                   }}

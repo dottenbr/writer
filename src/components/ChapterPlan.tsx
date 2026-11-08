@@ -476,7 +476,7 @@ export function ChapterPlan() {
   }, []);
 
   if (!project) return null;
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const orderedChapters = useMemo(

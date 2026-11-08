@@ -6,8 +6,10 @@ export function SnapshotBrowser() {
   const { snapshots, saveSnapshot, compareSnapshots, restoreSnapshot } =
     useProjectStore();
   const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
+  const isBookkit = useProjectStore(s=>!!s.currentProject()?.bookkitSlug);
+  const [error,setError]=useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [diffResult, setDiffResult] = useState<ChapterDiff[] | null>(null);
@@ -16,25 +18,26 @@ export function SnapshotBrowser() {
   const [restoring, setRestoring] = useState(false);
 
   const handleSaveSnapshot = async () => {
-    setSaving(true);
+    if(saving||!canEdit)return;
+    setSaving(true);setError("");
     try {
       await saveSnapshot(note || undefined);
       setNote("");
     } catch (err) {
-      console.error("Snapshot failed:", err);
+      setError((err as Error).message);
     } finally {
       setSaving(false);
     }
   };
 
   const handleCompare = async (snapshotId: string, message: string) => {
-    setComparing(true);
+    setComparing(true);setError("");
     setDiffTitle(message);
     try {
       const diffs = await compareSnapshots(snapshotId, "current");
       setDiffResult(diffs);
     } catch (err) {
-      console.error("Diff failed:", err);
+      setError((err as Error).message);
     } finally {
       setComparing(false);
     }
@@ -42,12 +45,12 @@ export function SnapshotBrowser() {
 
   const handleRestore = async (snapshotId: string) => {
     if (!confirm("Restore this snapshot? A safety snapshot of the current state will be created first.")) return;
-    setRestoring(true);
+    setRestoring(true);setError("");
     try {
       await restoreSnapshot(snapshotId);
       setDiffResult(null);
     } catch (err) {
-      console.error("Restore failed:", err);
+      setError((err as Error).message);
     } finally {
       setRestoring(false);
     }
@@ -55,6 +58,8 @@ export function SnapshotBrowser() {
 
   return (
     <div className="manage-card">
+      {isBookkit && <p>A snapshot keeps the whole book: every chapter, page and attached file. Restoring one first saves a safety snapshot, so nothing is lost.</p>}
+      {error && <p role="alert">{error}</p>}
       {/* Create snapshot */}
       <div className="snapshot-create">
         <input
@@ -108,7 +113,7 @@ export function SnapshotBrowser() {
                 <button
                   className="btn btn-sm"
                   onClick={() => handleRestore(snap.id)}
-                  disabled={restoring || !canEdit}
+                  disabled={restoring || useProjectStore.getState().currentProjectRole!=='owner'}
                 >
                   Restore
                 </button>
@@ -131,14 +136,15 @@ export function SnapshotBrowser() {
             </button>
           </div>
           <div className="snapshot-diff-body">
+            {diffResult.length===0 && <p>No file changes since this snapshot.</p>}
             {diffResult.map((chDiff) => {
               const wordDelta = chDiff.wordCountB - chDiff.wordCountA;
               const hasChanges = chDiff.diff.some((seg) => seg.type !== "same");
-              if (!hasChanges) return null;
+              if (!hasChanges && !chDiff.fileChange) return null;
               return (
                 <div key={chDiff.chapterId} className="snapshot-diff-chapter">
                   <div className="snapshot-diff-chapter-header">
-                    <span className="snapshot-diff-chapter-title">{chDiff.title}</span>
+                    <span className="snapshot-diff-chapter-title">{chDiff.title}{chDiff.fileChange && ` · ${chDiff.fileChange}`}</span>
                     <span className={wordDelta >= 0 ? "diff-positive" : "diff-negative"}>
                       {wordDelta >= 0 ? "+" : ""}{wordDelta} words
                     </span>

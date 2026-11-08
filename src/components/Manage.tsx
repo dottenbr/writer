@@ -1,4 +1,6 @@
-import { useState, useRef } from "react";
+import {parseBookkit} from '../lib/bookkit';
+import { downloadBookkitArchive, listBookDocuments } from "../lib/supabase-service";
+import { useState, useRef, useEffect } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { MANUSCRIPT_PRESET } from "../lib/export-config";
@@ -40,9 +42,14 @@ export function Manage() {
   const signOut = useAuthStore((s) => s.signOut);
   const userEmail = useAuthStore((s) => s.userEmail);
   const progressStats = useProjectStore((s) => s.progressStats);
-  const totalWordCount = useProjectStore((s) => s.totalWordCount());
+  const legacyWordCount = useProjectStore((s) => s.totalWordCount());
+  const [bookSummary,setBookSummary]=useState<{chapters:number;references:number;words:number}|null>(null);
+  useEffect(()=>{let active=true;setBookSummary(null);if(project?.bookkitSlug)listBookDocuments(project.id).then(docs=>{const b=parseBookkit(Object.fromEntries(docs.map(d=>[d.path,d.content])));if(active)setBookSummary({chapters:b.chapters.filter(c=>c.author).length,references:b.chapters.filter(c=>c.reference).length,words:b.chapters.reduce((n,c)=>n+(c.author?.body.trim().split(/\s+/).filter(Boolean).length??0),0)});}).catch(()=>{});return()=>{active=false;};},[project?.id,project?.bookkitSlug]);
+  const totalWordCount=project?.bookkitSlug?(bookSummary?.words??0):legacyWordCount;
   const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [archiveMessage,setArchiveMessage]=useState("");
+  const [archiveBusy,setArchiveBusy]=useState(false);
   const [exporting, setExporting] = useState(false);
   const zipInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,12 +76,12 @@ export function Manage() {
   const handleImportZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setArchiveBusy(true);setArchiveMessage('Inspecting archive…');
     try {
-      const data = new Uint8Array(await file.arrayBuffer());
-      await importProjectZip(data);
+      await importProjectZip(file,setArchiveMessage);
     } catch (err) {
-      console.error("Import failed:", err);
-    }
+      setArchiveMessage((err as Error).message);
+    } finally {setArchiveBusy(false);}
     if (zipInputRef.current) zipInputRef.current.value = "";
   };
 
@@ -95,7 +102,7 @@ export function Manage() {
 
   const targetWords = project?.brief.targetWordCount ?? 80000;
   const progressPct = targetWords > 0 ? Math.min(100, Math.round((totalWordCount / targetWords) * 100)) : 0;
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
   const isOwner = currentProjectRole === "owner";
 
   return (
@@ -113,14 +120,14 @@ export function Manage() {
           <div className="manage-overview-left">
             <div className="manage-overview-name">{project?.name || "Untitled"}</div>
             <div className="manage-overview-meta">
-              <span>{project?.chapters.length ?? 0} sections</span>
+              <span>{project?.bookkitSlug ? `${bookSummary?.chapters??'…'} author chapters · ${bookSummary?.references??'…'} reference chapters` : `${project?.chapters.length??0} sections`}</span>
               <span className="manage-overview-sep" />
               <span>{totalWordCount.toLocaleString()} words</span>
               <span className="manage-overview-sep" />
               <span>{progressPct}% of {targetWords.toLocaleString()} target</span>
             </div>
           </div>
-          <div className="manage-overview-stats">
+          {!project?.bookkitSlug&&<div className="manage-overview-stats">
             <div className="manage-stat">
               <span className="manage-stat-value">+{progressStats.todayWords}</span>
               <span className="manage-stat-label">today</span>
@@ -133,12 +140,12 @@ export function Manage() {
               <span className="manage-stat-value">+{progressStats.monthWords}</span>
               <span className="manage-stat-label">this month</span>
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* ─── Export section ─── */}
         <div className="manage-section-label">Export</div>
-        <div className="manage-export-card">
+        {project?.bookkitSlug ? <div className="manage-card"><div className="manage-card-title">Bookkit publication</div><p>Export the project ZIP to keep your book’s publication settings, references, and assets. Build DOCX, EPUB or PDF with Bookkit locally using that archive.</p></div> : <div className="manage-export-card">
           <div className="manage-export-header">
             <div className="manage-card-title">Manuscript Export</div>
             <div className="manage-preset-row">
@@ -353,11 +360,17 @@ export function Manage() {
             <button
               className="btn btn-primary"
               onClick={() => void handleExport()}
-              disabled={!project || exporting}
+              disabled={!project || exporting || !!project.bookkitSlug}
             >
               {exporting ? "Exporting..." : `Export as ${formatLabel}`}
             </button>
           </div>
+        </div>}
+
+        <div className="manage-card">
+          <div className="manage-card-title">Book AI policy: human-authored prose</div>
+          <p>AI cannot write or insert manuscript prose. Editorial suggestions and quality reviews are advisory. AI may help write and update the bible, outlines, and scene cards.</p>
+          <p className="manage-card-hint">This policy applies to every book and cannot be relaxed in bookkit.</p>
         </div>
 
         {/* ─── Workspace section ─── */}
@@ -373,16 +386,22 @@ export function Manage() {
                 style={{ display: "none" }}
                 onChange={handleImportZip}
               />
-              <button className="btn" onClick={() => zipInputRef.current?.click()}>
+              <button className="btn" disabled={archiveBusy} onClick={() => zipInputRef.current?.click()}>
                 Import ZIP
               </button>
-              <button className="btn" onClick={() => void exportCurrentProjectZip()}>
+              <button className="btn" disabled={archiveBusy} onClick={async()=>{
+                setArchiveBusy(true);setArchiveMessage('');
+                try{if(project?.bookkitSlug)await downloadBookkitArchive(project.id,project.name,setArchiveMessage);else await exportCurrentProjectZip();}
+                catch(e){if((e as Error).name!=='AbortError')setArchiveMessage((e as Error).message);}
+                finally{setArchiveBusy(false);}
+              }}>
                 Export ZIP
               </button>
             </div>
-            <div className="manage-card-hint">ZIP import creates a new project from an archive.</div>
+            <div className="manage-card-hint">ZIP import creates a new project from a Bookkit or legacy project archive. {project?.bookkitSlug && "Bookkit export preserves the original paths, metadata and assets. Large archives save directly to disk in Chrome or Edge."}</div>
           </div>
 
+          {archiveMessage&&<p role="status">{archiveMessage}</p>}
           <div className="manage-card">
             <div className="manage-card-title">Preferences</div>
             <div className="manage-card-actions">

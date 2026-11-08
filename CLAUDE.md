@@ -4,7 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Writer is a collaborative manuscript writing app built with React + TypeScript + Supabase. It can run as a native desktop app via Tauri v2 or in the browser during development.
+Bookkit (bookkit.net) is a collaborative book-writing app built with React + TypeScript + Supabase, served by a Cloudflare Worker (`wrangler.jsonc`, `worker/index.ts`). It can also run as a Tauri v2 desktop app.
+
+## The Studio (current UI)
+
+Every book is stored as Bookkit files (`book.yaml`, `manuscript/`, `draft/`, `bible/`, `outline/`, `craft/`, `research/`) in `bookkit_documents`, but the UI never shows files. `src/components/studio/` presents one linked workspace:
+
+- `Studio.tsx` — shell: top bar (book switcher, Write / Plan / Bible views, ⌘K jump palette, sharing, account), entity hover cards, link navigation, new book/chapter dialogs.
+- `Navigator.tsx` — contents: manuscript chapters (with parts and status), story bible, plan, craft, research.
+- `ManuscriptView.tsx` — the whole manuscript as one continuous document; the chapter you click becomes a live editor, the rest render statically. Reference-draft chapters are read-only; "Write this chapter" starts the author's file (bookkit `start` semantics, never copying draft prose).
+- `CompanionView.tsx` — bible / plan / craft pages as rich documents.
+- `ContextPanel.tsx` — chapter plan + scene cards, mentioned bible entries, "referenced in", reference draft, comments and suggestions, AI assist.
+- `Boards.tsx` — Plan board (cards, or `PlanList.tsx` list with drag-to-reorder via `src/lib/reorder.ts`) and Bible board (entity cards with kind filters).
+- `BriefPage.tsx` — logline, genre, readers, comparable titles, themes, target length (location `@brief`); the Inspiration view reuses `Inspiration.tsx`.
+- `useDocSession.ts` — load, autosave (900 ms), three-way merge, suggestions for non-owners, IndexedDB draft backup, live remote updates.
+
+Key libraries: `src/lib/markdown-doc.ts` converts Markdown ⇄ editor and writes untouched blocks back byte-for-byte; `src/lib/book-model.ts` derives chapters, entities (from `## Name` sections), chapter anchors (`*Ch. 9*`) and mentions; `src/lib/editor-extensions.ts` holds the TipTap schema and the link/comment decorations; `src/store/useBookStore.ts` holds book files, navigation and realtime.
+
+Projects without `bookkit_slug` still open in the legacy tabbed UI (`Layout.tsx` → `LegacyLayout`). New books are always created as Bookkit books (`createBook` in `supabase-service.ts`).
 
 ## Commands
 
@@ -81,10 +98,10 @@ Single Zustand store (`src/store/useProjectStore.ts`) holds all app state. Key p
 
 `src/types.ts` defines the entire data model: `Project`, `Chapter`, `Scene`, `Character`, `Thread`, `Location`, `CodexEntry`, `Brief`, `WritingDials`, `Comment`, etc. It also contains factory functions (`createDefault*`) and section-type formatting utilities.
 
-### UI Tabs
+### Legacy UI Tabs
 
-The app has six tabs (type `TabId`): brief, plan, bible, manuscript, inspiration, manage. Each maps to a component in `src/components/`.
+Legacy (non-Bookkit) projects use tabs (type `TabId`): brief, plan, bible, manuscript, inspiration, manage.
 
 ### LLM Integration
 
-`src/lib/llm-service.ts` calls Anthropic or OpenAI APIs directly from the frontend using API keys stored in project settings. No backend proxy.
+`src/lib/llm-service.ts` sends requests through the authenticated Worker route `/api/ai`, which checks book access and applies the human-authorship policy (`src/lib/ai-policy.ts`). Keys are entered per browser. AI never writes manuscript prose.

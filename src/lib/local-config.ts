@@ -4,11 +4,11 @@ import type { ExportConfig } from "./export-config";
 export interface LlmSettings {
   anthropicKey?: string;
   openaiKey?: string;
-  selectedProvider: "anthropic" | "openai";
+  selectedProvider: "bookkit" | "anthropic" | "openai";
   selectedModel: string;
 }
 
-export interface WriterConfig {
+export interface BookkitConfig {
   lastProjectId?: string;
   lastActiveTab?: import("../types").TabId;
   lastActiveBibleSection?: import("../types").BibleSection;
@@ -43,18 +43,18 @@ function safeWriteJson(key: string, value: unknown): void {
   } catch {}
 }
 
-export function readUserConfig(): WriterConfig {
-  return safeReadJson<WriterConfig>(WRITER_CONFIG_KEY, {});
+export function readUserConfig(): BookkitConfig {
+  return safeReadJson<BookkitConfig>(WRITER_CONFIG_KEY, {});
 }
 
-export function writeUserConfig(config: WriterConfig): void {
+export function writeUserConfig(config: BookkitConfig): void {
   safeWriteJson(WRITER_CONFIG_KEY, config);
 }
 
 export function readLocalLlmSettings(): LlmSettings {
   return safeReadJson<LlmSettings>(LLM_SETTINGS_KEY, {
-    selectedProvider: "anthropic",
-    selectedModel: "claude-sonnet-4",
+    selectedProvider: "bookkit",
+    selectedModel: "@cf/moonshotai/kimi-k2.6",
   });
 }
 

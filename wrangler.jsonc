@@ -1,0 +1,27 @@
+{
+  "name": "thin-place-writer",
+  "account_id": "24c549e9c3005de7a3c295ead2c4bb87",
+  "compatibility_date": "2026-11-08",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "main": "worker/index.ts",
+  "ai": { "binding": "AI" },
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": {
+    "SUPABASE_URL": "https://eujclkjaaqeoxcodwwxq.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Kb8rkJr2M7kNgU_UATyVSg_wGLi8yQM"
+  },
+  "routes": [
+    {
+      "pattern": "bookkit.net",
+      "custom_domain": true
+    }
+  ],
+  "workers_dev": true
+}

@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import type { TabId } from "../types";
+import { Studio, NewBookDialog, useTheme } from "./studio/Studio";
+import { useAuthStore } from "../store/useAuthStore";
 
 const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
 const ChapterPlan = lazy(() => import("./ChapterPlan").then((mod) => ({ default: mod.ChapterPlan })));
@@ -20,8 +22,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "manage", label: "Manage" },
 ];
 
+function canNavigate() { return window.dispatchEvent(new Event("writer-before-navigation", {cancelable:true})); }
+
 function ProjectSwitcher() {
-  const projects = useProjectStore((s) => s.projects);
+  const projects = useProjectStore((s) => s.projectCatalog);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const switchProject = useProjectStore((s) => s.switchProject);
   const createProject = useProjectStore((s) => s.createProject);
@@ -66,6 +70,7 @@ function ProjectSwitcher() {
               key={p.id}
               className={`project-list-item ${p.id === currentProjectId ? "current" : ""}`}
               onClick={() => {
+                if(!canNavigate())return;
                 switchProject(p.id);
                 setShowProjectSwitcher(false);
               }}
@@ -157,14 +162,14 @@ function SaveIndicator() {
   const syncStatus = useProjectStore((s) => s.syncStatus);
 
   return (
-    <div className="save-indicator" style={{ cursor: "pointer" }} onClick={() => void saveToStorage()}>
+    <div className="save-indicator" style={{ cursor: "pointer" }} onClick={() => { if(window.dispatchEvent(new Event("writer-save-document", {cancelable:true}))) void saveToStorage(); }}>
       <span className={`save-dot ${dirty ? "dirty" : ""}`} />
       {dirty ? "Unsaved changes" : lastSaved ? `Saved · ${syncStatus}` : syncStatus}
     </div>
   );
 }
 
-export function Layout() {
+function LegacyLayout() {
   const activeTab = useProjectStore((s) => s.activeTab);
   const setActiveTab = useProjectStore((s) => s.setActiveTab);
   const saveToStorage = useProjectStore((s) => s.saveToStorage);
@@ -177,7 +182,7 @@ export function Layout() {
   const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const [newProjectName, setNewProjectName] = useState("");
   const hasProject = !!currentProject;
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "editor";
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
   function renderActiveTab() {
     switch (activeTab) {
@@ -205,7 +210,7 @@ export function Layout() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
           </svg>
-          <span className="topbar-logo-text">Writer</span>
+          <span className="topbar-logo-text">bookkit</span>
         </div>
 
         <div className="topbar-divider" />
@@ -219,7 +224,7 @@ export function Layout() {
             <button
               key={tab.id}
               className={`tab-button ${activeTab === tab.id ? "active" : ""} ${!hasProject ? "disabled" : ""}`}
-              onClick={() => hasProject && setActiveTab(tab.id)}
+              onClick={() => hasProject && canNavigate() && setActiveTab(tab.id)}
               disabled={!hasProject}
             >
               {tab.label}
@@ -230,7 +235,7 @@ export function Layout() {
         <div className="topbar-actions">
           {hasProject && <SaveIndicator />}
           {hasProject && canEdit && (
-            <button className="btn btn-sm" onClick={() => void saveToStorage()}>
+            <button className="btn btn-sm" onClick={() => { if(window.dispatchEvent(new Event("writer-save-document", {cancelable:true}))) void saveToStorage(); }}>
               Save ({navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+S)
             </button>
           )}
@@ -326,4 +331,52 @@ export function Layout() {
       )}
     </div>
   );
+}
+
+function Welcome() {
+  const importProjectZip = useProjectStore((s) => s.importProjectZip);
+  const signOut = useAuthStore((s) => s.signOut);
+  const email = useAuthStore((s) => s.userEmail);
+  const [creating, setCreating] = useState(false);
+  const [message, setMessage] = useState("");
+  useTheme();
+  return (
+    <div className="welcome">
+      <div className="welcome-card">
+        <div className="brand large"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></div>
+        <h1>Your books, in one place</h1>
+        <p>Write your manuscript like a document, with the plan, story bible and research one click away. Everything links together.</p>
+        <div className="welcome-actions">
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>Start a new book</button>
+          <label className="btn">
+            Import a Bookkit archive
+            <input type="file" accept=".zip" hidden onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try { await importProjectZip(file, setMessage); } catch (err) { setMessage((err as Error).message); }
+            }} />
+          </label>
+        </div>
+        {message && <p className="welcome-status" role="status">{message}</p>}
+        <div className="welcome-foot">Signed in as {email} · <button className="link-btn" onClick={() => void signOut()}>Sign out</button></div>
+      </div>
+      {creating && <NewBookDialog onClose={() => setCreating(false)} />}
+    </div>
+  );
+}
+
+export function Layout() {
+  const currentProject = useProjectStore((s) => s.currentProject());
+  const catalogStatus = useProjectStore((s) => s.catalogStatus);
+  const showApiSettings = useProjectStore((s) => s.showApiSettings);
+  const setShowApiSettings = useProjectStore((s) => s.setShowApiSettings);
+  const modal = showApiSettings && (
+    <Suspense fallback={null}>
+      <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
+    </Suspense>
+  );
+  if (!currentProject && catalogStatus !== "ready") return <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
+  if (!currentProject) return <>{<Welcome />}{modal}</>;
+  if (currentProject.bookkitSlug) return <>{<Studio />}{modal}</>;
+  return <LegacyLayout />;
 }

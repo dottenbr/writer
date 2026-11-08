@@ -1,0 +1,7 @@
+import type {BookDocumentRow} from './supabase-service';import type {Suggestion} from './bookkit-collaboration';
+export interface LocalBookDraft {key:string;content:string;base:BookDocumentRow;suggestion?:Suggestion;updatedAt:number}
+const database=new Promise<IDBDatabase>((resolve,reject)=>{const request=indexedDB.open('writer-book-drafts',1);request.onupgradeneeded=()=>request.result.createObjectStore('drafts',{keyPath:'key'});request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+export const draftKey=(userId:string,projectId:string,path:string)=>JSON.stringify([userId,projectId,path]);
+export async function readLocalDraft(key:string):Promise<LocalBookDraft|undefined>{const db=await database;return new Promise((resolve,reject)=>{const r=db.transaction('drafts').objectStore('drafts').get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+export async function writeLocalDraft(draft:LocalBookDraft):Promise<void>{const db=await database;return new Promise((resolve,reject)=>{const tx=db.transaction('drafts','readwrite');tx.objectStore('drafts').put(draft);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});}
+export async function clearLocalDraft(key:string,content:string):Promise<void>{const db=await database;return new Promise((resolve,reject)=>{const tx=db.transaction('drafts','readwrite'),store=tx.objectStore('drafts'),r=store.get(key);r.onsuccess=()=>{if(r.result?.content===content)store.delete(key);};tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});}

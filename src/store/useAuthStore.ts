@@ -4,6 +4,7 @@ import {
   acceptProjectInvitations,
   signOut as sbSignOut,
   getCurrentUser,
+  verifySignInCode,
 } from "../lib/supabase-service";
 
 interface AuthStore {
@@ -11,18 +12,24 @@ interface AuthStore {
   userEmail: string | null;
   isAuthenticated: boolean;
 
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string, alreadySignedIn?: boolean) => Promise<void>;
+  signInWithCode: (email: string, code: string) => Promise<void>;
   signOut: () => Promise<void>;
   checkAuth: () => Promise<boolean>;
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   userId: null,
   userEmail: null,
   isAuthenticated: false,
 
-  signIn: async (email, password) => {
-    await sbSignIn(email, password);
+  signInWithCode: async (email, code) => {
+    await verifySignInCode(email, code);
+    await get().signIn("", "", true);
+  },
+
+  signIn: async (email, password, alreadySignedIn?: boolean) => {
+    if (!alreadySignedIn) await sbSignIn(email, password);
     const user = await getCurrentUser();
     if (user) {
       await acceptProjectInvitations();

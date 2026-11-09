@@ -40,6 +40,33 @@ async function included(body:any,env:Env,headers:Record<string,string>,signal:Ab
  return json({text,model});
 }
 
+const esc=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+/** Space an 8-digit code as "1234 5678" so it is easy to read and type. */
+export const spacedCode=(code:string)=>code.length>=8?code.slice(0,code.length/2)+' '+code.slice(code.length/2):code;
+/**
+ * A Bookkit-branded transactional email: wordmark, a short message, an
+ * optional one-time code and an optional button. Always plain HTML tables
+ * with inline styles (what mail clients render reliably) plus a plain-text
+ * twin.
+ */
+export function bookkitEmail(o:{preheader:string;lines:string[];code?:string;codeLead?:string;codeNote?:string;button?:{label:string;url:string};footnote:string;origin:string}):{html:string;text:string}{
+ const font="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif";
+ const p=(t:string)=>`<p style="margin:0 0 14px;font:15px/1.55 ${font};color:#1d1c1a">${t}</p>`;
+ const code=o.code?`<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 10px"><tr><td style="background:#f4f2ee;border:1px solid #e7e4de;border-radius:10px;padding:14px 22px;font:600 30px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:6px;color:#1d1c1a">${esc(spacedCode(o.code))}</td></tr></table>`+(o.codeNote?`<p style="margin:0 0 18px;font:13px/1.5 ${font};color:#55514b">${o.codeNote}</p>`:''):'';
+ const button=o.button?`<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 18px"><tr><td style="background:#1d1c1a;border-radius:8px"><a href="${esc(o.button.url)}" style="display:inline-block;padding:11px 20px;font:600 14px ${font};color:#ffffff;text-decoration:none">${esc(o.button.label)}</a></td></tr></table>`:'';
+ const html=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Bookkit</title></head><body style="margin:0;padding:0;background:#f6f5f2">`
+  +`<div style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(o.preheader)}</div>`
+  +`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f5f2"><tr><td align="center" style="padding:32px 16px">`
+  +`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px">`
+  +`<tr><td style="padding:0 4px 18px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:30px;height:30px;background:#1d1c1a;border-radius:8px;text-align:center;vertical-align:middle;font:italic 700 20px/30px Georgia,'Times New Roman',serif;color:#ffffff">b</td><td style="padding-left:9px;font:600 18px ${font};color:#1d1c1a;letter-spacing:-0.2px">bookkit</td></tr></table></td></tr>`
+  +`<tr><td style="background:#ffffff;border:1px solid #e7e4de;border-radius:14px;padding:28px 28px 14px">${o.lines.map(p).join('')}${button}${o.codeLead?p(o.codeLead):''}${code}</td></tr>`
+  +`<tr><td style="padding:16px 4px 0;font:12px/1.5 ${font};color:#8a857d">${o.footnote}<br><a href="${esc(o.origin)}" style="color:#8a857d">${esc(new URL(o.origin).host)}</a> · Write your book.</td></tr>`
+  +`</table></td></tr></table></body></html>`;
+ const strip=(t:string)=>t.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+ const text=[...o.lines.map(strip),o.button?`${o.button.label}: ${o.button.url}`:'',o.codeLead?strip(o.codeLead):'',o.code?spacedCode(o.code):'',o.codeNote?strip(o.codeNote):'','—',strip(o.footnote),new URL(o.origin).host].filter(Boolean).join('\n\n');
+ return {html,text};
+}
+
 /**
  * A one-time sign-in link for an invited collaborator, for the owner to send
  * themselves. Nothing is emailed. Only the book's owner can create one, and
@@ -67,30 +94,41 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  if(!res.ok)res=await generate('magiclink');
  const data:any=await res.json().catch(()=>null);
  const link=data?.action_link??data?.properties?.action_link;
+ const code=data?.email_otp??data?.properties?.email_otp;
  if(!res.ok||typeof link!=='string')return json({error:'Could not create a sign-in link. Try again.'},502);
  if(body?.send!==true)return json({link});
  if(!env.EMAIL)return json({error:'Email sending is not configured on this server. Copy the link instead.',link},503);
  const book=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=name&id=eq.${projectId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]);
  const title=String(book?.[0]?.name??'a book').slice(0,200);
  const inviter=String(user?.user_metadata?.display_name||user?.email||'The author').slice(0,120);
- const esc=(s:string)=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]!));
+ const hasCode=typeof code==='string'&&/^\d{6,10}$/.test(code);
+ const mail=bookkitEmail({
+  origin:url.origin,
+  preheader:`${inviter} invited you to work on ${title}.`,
+  lines:[`<strong>${esc(inviter)}</strong> invited you to work on <strong>${esc(title)}</strong> in Bookkit.`],
+  button:{label:'Open the book',url:link},
+  codeLead:hasCode?`Or go to ${esc(url.host)}, choose <em>I have a code</em>, and enter this email address with the code:`:undefined,
+  code:hasCode?code:undefined,
+  codeNote:hasCode?`The button and the code work once and expire after an hour. If they expire, ask ${esc(inviter)} to send the invitation again.`:undefined,
+  footnote:'You can set a password later from the account menu. If you weren’t expecting this invitation, you can ignore it.',
+ });
  const sent=await env.EMAIL.send({
   to:email,
   from:{email:'invitations@bookkit.net',name:'Bookkit'},
   replyTo:user?.email,
   subject:`${inviter} invited you to “${title}” on Bookkit`,
-  text:`${inviter} invited you to work on “${title}” in Bookkit.\n\nOpen this link to sign in (it works once and expires in 24 hours):\n${link}\n\nAfter signing in you can set a password from the account menu.\n\nIf you weren't expecting this, you can ignore this email.`,
-  html:`<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1d1c1a"><p style="font-size:15px">${esc(inviter)} invited you to work on <strong>${esc(title)}</strong> in Bookkit.</p><p><a href="${esc(link)}" style="display:inline-block;background:#3b57c4;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Open the book</a></p><p style="font-size:13px;color:#55514b">The link works once and expires in 24 hours. After signing in you can set a password from the account menu.</p><p style="font-size:12px;color:#8a857d">If you weren’t expecting this, you can ignore this email.</p></div>`,
+  text:mail.text,html:mail.html,
  });
  return json({sent:true,messageId:sent?.messageId??null});
 }
 
 /**
- * "Email me a sign-in link" for existing accounts, sent by Bookkit. The
- * answer never reveals whether an account exists, no account is created, and
- * each account gets at most one link a minute.
+ * "Email me a code" for existing accounts, sent by Bookkit. The answer never
+ * reveals whether an account exists, no account is created, and each account
+ * gets at most one code a minute. The code signs in through
+ * supabase.auth.verifyOtp({type:'email'}).
  */
-async function signInLink(request:Request,env:Env,url:URL):Promise<Response>{
+async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  if(request.method!=='POST')return json({error:'POST required'},405);
  const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
  if(!env.SUPABASE_SECRET_KEY||!env.EMAIL)return json({error:'Email sign-in is not available. Use your password.'},503);
@@ -109,22 +147,28 @@ async function signInLink(request:Request,env:Env,url:URL):Promise<Response>{
  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{...user.app_metadata,bookkit_link_sent_at:Date.now()}}),signal});
  const res=await fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type:'magiclink',email,redirect_to:url.origin+'/'}),signal});
  const data:any=await res.json().catch(()=>null);
- const link=data?.action_link??data?.properties?.action_link;
- if(!res.ok||typeof link!=='string')return done;
- const esc=(s:string)=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]!));
+ const code=data?.email_otp??data?.properties?.email_otp;
+ if(!res.ok||typeof code!=='string'||!/^\d{6,10}$/.test(code))return done;
+ const mail=bookkitEmail({
+  origin:url.origin,
+  preheader:`Your code is ${spacedCode(code)}. It expires in an hour.`,
+  lines:['Here’s your code for signing in to Bookkit. Type it on the sign-in screen:'],
+  code,
+  codeNote:'It works once and expires in an hour. Forgot your password? After signing in, choose <em>Set password</em> in the account menu.',
+  footnote:'You’re getting this because someone asked to sign in to Bookkit with this email address. If it wasn’t you, ignore this email; nobody can sign in without the code.',
+ });
  await env.EMAIL.send({
   to:email,
   from:{email:'sign-in@bookkit.net',name:'Bookkit'},
-  subject:'Your Bookkit sign-in link',
-  text:`Open this link to sign in to Bookkit (it works once and expires soon):\n${link}\n\nForgot your password? Sign in with this link, then choose Set password in the account menu.\n\nIf you didn't ask for this, you can ignore this email.`,
-  html:`<div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1d1c1a"><p style="font-size:15px">Here’s your sign-in link for Bookkit.</p><p><a href="${esc(link)}" style="display:inline-block;background:#3b57c4;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Sign in to Bookkit</a></p><p style="font-size:13px;color:#55514b">It works once and expires soon. Forgot your password? Sign in with this link, then choose <em>Set password</em> in the account menu.</p><p style="font-size:12px;color:#8a857d">If you didn’t ask for this, you can ignore this email.</p></div>`,
+  subject:`Your Bookkit code: ${spacedCode(code)}`,
+  text:mail.text,html:mail.html,
  }).catch(()=>null);
  return done;
 }
 
 export default {async fetch(request:Request,env:Env):Promise<Response>{
  const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
- if(url.pathname==='/api/sign-in-link')return signInLink(request,env,url).catch(()=>json({ok:true}));
+ if(url.pathname==='/api/sign-in-code'||url.pathname==='/api/sign-in-link')return signInCode(request,env,url).catch(()=>json({ok:true}));
  if(url.pathname==='/api/invite-link')return inviteLink(request,env,url).catch(()=>json({error:'Could not create a sign-in link. Try again.'},502));
  if(url.pathname!=='/api/ai')return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST required'},405);

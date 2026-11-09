@@ -12,7 +12,7 @@ Every book is stored as Bookkit files (`book.yaml`, `manuscript/`, `draft/`, `bi
 
 - `Studio.tsx` — shell: top bar (book switcher, Write / Plan / Bible views, ⌘K jump palette, sharing, account), entity hover cards, link navigation, new book/chapter dialogs.
 - `Navigator.tsx` — contents: manuscript chapters (with parts and status), story bible, plan, craft, research.
-- `ManuscriptView.tsx` — the whole manuscript as one continuous document; the chapter you click becomes a live editor, the rest render statically. Reference-draft chapters are read-only; "Write this chapter" starts the author's file (bookkit `start` semantics, never copying draft prose).
+- `ManuscriptView.tsx` — the whole manuscript as one continuous document; the chapter you click becomes a live editor, the rest render statically. Reference-draft chapters are read-only; "Write this chapter" starts the author's file (bookkit `start` semantics, never copying draft prose). While that file is still empty, "Go back to the reference draft" deletes it again (owner only, version-checked).
 - `CompanionView.tsx` — bible / plan / craft pages as rich documents.
 - `ContextPanel.tsx` — chapter plan + scene cards, mentioned bible entries, "referenced in", reference draft, comments and suggestions, AI assist.
 - `Boards.tsx` — Plan board (cards, or `PlanList.tsx` list with drag-to-reorder via `src/lib/reorder.ts`) and Bible board (entity cards with kind filters).

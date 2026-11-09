@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
-import { saveBookDocument } from "../../lib/supabase-service";
+import { discardBookDocument, saveBookDocument } from "../../lib/supabase-service";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
-import { setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
+import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
 import { ActiveDoc } from "./ActiveDoc";
 import { StaticProse } from "./RichEditor";
 import { useEditorBus } from "./editorBus";
@@ -89,6 +89,40 @@ function ChapterHeader({ chapter, session, active }: { chapter: ChapterInfo; ses
           </label>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Undo "Write this chapter": while your started chapter is still empty, you
+ * can go back to reading the reference draft. Once you've written a word,
+ * the option goes away.
+ */
+function StartedNotice({ chapter, session }: { chapter: ChapterInfo; session: DocSession | null }) {
+  const { isOwner, projectId } = useAccess();
+  const file = useBookStore(s => s.files.find(f => f.path === chapter.authorPath));
+  const drop = useBookStore(s => s.drop);
+  const go = useBookStore(s => s.go);
+  const threads = useBookStore(s => (chapter.authorPath ? (s.openThreads[chapter.authorPath] ?? 0) + (s.pendingSuggestions[chapter.authorPath] ?? 0) : 0));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!isOwner || !projectId || !chapter.authorPath || !chapter.referencePath || !file?.loaded || threads) return null;
+  const text = session?.text ?? file.content;
+  if (countWords(markdownToPlain(splitDocument(text).body)) > 0) return null;
+  if (session && (!["idle", "saved"].includes(session.state) || session.text !== file.content)) return null;
+  async function discard() {
+    setBusy(true); setError("");
+    try {
+      await discardBookDocument(projectId!, chapter.authorPath!, file!.version);
+      drop(chapter.authorPath!);
+      go(chapter.referencePath!);
+    } catch (e) { setError((e as Error).message); setBusy(false); }
+  }
+  return (
+    <div className="started-notice">
+      <span>Nothing written yet.</span>
+      <button className="link-btn" disabled={busy} onClick={() => void discard()}>{busy ? "Going back…" : "Go back to the reference draft"}</button>
+      {error && <div className="inline-error" role="alert">{error}</div>}
     </div>
   );
 }
@@ -194,6 +228,7 @@ export function ManuscriptView() {
             >
               <ChapterHeader chapter={c} session={isActive && session?.path === path ? session : null} active={isActive} />
               {showReference && <ReferenceNotice chapter={c} />}
+              {!showReference && <StartedNotice chapter={c} session={isActive && session?.path === path ? session : null} />}
               {isActive ? (
                 <ActiveDoc
                   key={path}

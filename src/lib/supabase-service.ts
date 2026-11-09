@@ -1817,17 +1817,25 @@ export async function saveBookDocument(projectId: string, path: string, content:
   return data;
 }
 
+/** Undo "Write this chapter": delete an author chapter file, but only if nobody has saved to it since `version`. */
+export async function discardBookDocument(projectId: string, path: string, version: number): Promise<void> {
+  const {data,error}=await supabase.from('bookkit_documents').delete().eq('project_id',projectId).eq('path',path).eq('version',version).select('path');
+  if(error) throw error;
+  if(!data?.length) throw new Error('This chapter changed in another session, so it was kept. Reload and try again.');
+}
+
 export async function acceptProjectInvitations(): Promise<void> {
  const {error}=await supabase.rpc('accept_project_invitations');if(error)throw error;
 }
 export async function requestSignInEmail(email: string): Promise<void> {
- const res=await fetch('/api/sign-in-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.trim()})});
+ const res=await fetch('/api/sign-in-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.trim()})});
  const body=await res.json().catch(()=>null);
- if(!res.ok)throw new Error(body?.error??'Could not send a sign-in link. Use your password instead.');
+ if(!res.ok)throw new Error(body?.error??'Could not send a sign-in code. Use your password instead.');
 }
 
 export async function verifySignInCode(email: string, token: string): Promise<void> {
- const {error}=await supabase.auth.verifyOtp({email:email.trim(),token:token.trim(),type:'email'});if(error)throw error;
+ const {error}=await supabase.auth.verifyOtp({email:email.trim(),token:token.replace(/\D/g,''),type:'email'});
+ if(error)throw new Error(/expired|invalid/i.test(error.message)?'That code is wrong or has expired. Check the latest email, or send a new code.':error.message);
 }
 export async function updateProjectMemberRole(projectId: string, userId: string, role: 'coauthor'|'editor'|'viewer'): Promise<void> {
  const pending=userId.startsWith('invitation:');

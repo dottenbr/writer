@@ -48,6 +48,7 @@ interface BookState {
   unload: () => void;
   refreshPath: (path: string) => Promise<BookDocumentRow | null>;
   upsert: (row: BookDocumentRow) => void;
+  drop: (path: string) => void;
   ensureLoaded: (path: string) => Promise<BookDocumentRow | null>;
   refreshReviewCounts: () => Promise<void>;
   setView: (view: View) => void;
@@ -183,6 +184,11 @@ export const useBookStore = create<BookState>((set, get) => {
         const files = index >= 0 ? s.files.map((f, i) => (i === index ? { ...row, loaded: true } : f)) : [...s.files, { ...row, loaded: true }].sort((a, b) => a.path.localeCompare(b.path));
         return { files };
       });
+      rebuild();
+    },
+
+    drop: (path) => {
+      set(s => ({ files: s.files.filter(f => f.path !== path) }));
       rebuild();
     },
 

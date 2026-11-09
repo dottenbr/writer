@@ -60,7 +60,7 @@ describe("invitation links", () => {
       .mockResolvedValueOnce(Response.json({ id: "u1", email: "author@example.com", user_metadata: { display_name: "Ann <Author>" } }))
       .mockResolvedValueOnce(Response.json([{ id: PID }]))
       .mockResolvedValueOnce(Response.json([{ id: "inv" }]))
-      .mockResolvedValueOnce(Response.json({ action_link: "https://project.supabase.co/auth/v1/verify?token=t" }))
+      .mockResolvedValueOnce(Response.json({ action_link: "https://project.supabase.co/auth/v1/verify?token=t", email_otp: "12345678" }))
       .mockResolvedValueOnce(Response.json([{ name: "Cold Solder" }])));
     const send = vi.fn().mockResolvedValue({ messageId: "m1" });
     const res = await worker.fetch(post("/api/invite-link", { projectId: PID, email: "a@b.co", send: true }), { ...env, EMAIL: { send } });
@@ -70,6 +70,8 @@ describe("invitation links", () => {
     expect(msg.subject).toBe("Ann <Author> invited you to “Cold Solder” on Bookkit");
     expect(msg.html).toContain("Ann &lt;Author&gt;");
     expect(msg.text).toContain("https://project.supabase.co/auth/v1/verify?token=t");
+    expect(msg.text).toContain("1234 5678");
+    expect(msg.html).toContain("1234 5678");
   });
 
   it("rejects anonymous and cross-origin requests", async () => {
@@ -78,9 +80,9 @@ describe("invitation links", () => {
   });
 });
 
-describe("sign-in links", () => {
+describe("sign-in codes", () => {
   const env = { ...baseEnv, SUPABASE_SECRET_KEY: "secret" } as any;
-  const req = (email: string) => new Request("https://bookkit.test/api/sign-in-link", { method: "POST", body: JSON.stringify({ email }) });
+  const req = (email: string) => new Request("https://bookkit.test/api/sign-in-code", { method: "POST", body: JSON.stringify({ email }) });
   it("answers the same for unknown emails and never creates an account", async () => {
     const f = vi.fn().mockResolvedValueOnce(Response.json([]));
     vi.stubGlobal("fetch", f);
@@ -96,13 +98,24 @@ describe("sign-in links", () => {
       .mockResolvedValueOnce(Response.json([{ id: "u1" }]))
       .mockResolvedValueOnce(Response.json({ id: "u1", app_metadata: { provider: "email" } }))
       .mockResolvedValueOnce(Response.json({}))
-      .mockResolvedValueOnce(Response.json({ action_link: "https://p/verify?token=x" })));
+      .mockResolvedValueOnce(Response.json({ action_link: "https://p/verify?token=x", email_otp: "87654321" })));
     expect(await (await worker.fetch(req("Me@Example.com"), { ...env, EMAIL: { send } })).json()).toEqual({ ok: true });
-    expect(send.mock.calls[0][0]).toMatchObject({ to: "me@example.com", from: { email: "sign-in@bookkit.net", name: "Bookkit" } });
+    const msg = send.mock.calls[0][0];
+    expect(msg).toMatchObject({ to: "me@example.com", from: { email: "sign-in@bookkit.net", name: "Bookkit" }, subject: "Your Bookkit code: 8765 4321" });
+    expect(msg.text).toContain("8765 4321");
+    expect(msg.html).toContain("bookkit</td>");
+    // The code email carries no sign-in link.
+    expect(msg.text).not.toContain("https://p/verify");
+    expect(msg.html).not.toContain("https://p/verify");
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(Response.json([{ id: "u1" }]))
       .mockResolvedValueOnce(Response.json({ id: "u1", app_metadata: { bookkit_link_sent_at: Date.now() - 5000 } })));
     await worker.fetch(req("me@example.com"), { ...env, EMAIL: { send } });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("still answers on the old sign-in-link route for open tabs", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json([])));
+    const res = await worker.fetch(new Request("https://bookkit.test/api/sign-in-link", { method: "POST", body: JSON.stringify({ email: "x@y.co" }) }), { ...env, EMAIL: { send: vi.fn() } });
+    expect(await res.json()).toEqual({ ok: true });
   });
 });

@@ -83,6 +83,19 @@ export function setFrontMatterField(raw: string, key: string, value: string | nu
 export const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** Allow only http(s), mailto, and scheme-less relative/anchor links; block javascript:/data:/vbscript:. */
+export function isSafeHref(href: string): boolean {
+  const normalized = href.replace(/[\u0000-\u001F\u007F-\u009F\s]+/g, "");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(normalized)) {
+    return /^(?:https?|mailto):/i.test(normalized);
+  }
+  return !normalized.startsWith("//");
+}
+
+export function safeHref(href: string): string {
+  return isSafeHref(href) ? href : "#";
+}
+
 function inline(tokens: Token[] | undefined): string {
   if (!tokens) return "";
   return tokens.map(t => {
@@ -100,7 +113,7 @@ function inline(tokens: Token[] | undefined): string {
       case "br": return "<br>";
       case "link": {
         const l = t as Tokens.Link;
-        return `<a href="${escapeHtml(l.href)}"${l.title ? ` title="${escapeHtml(l.title)}"` : ""}>${inline(l.tokens)}</a>`;
+        return `<a href="${escapeHtml(safeHref(l.href))}"${l.title ? ` title="${escapeHtml(l.title)}"` : ""}>${inline(l.tokens)}</a>`;
       }
       case "image": return escapeHtml(t.raw);
       case "html": return escapeHtml(t.raw);
@@ -131,10 +144,13 @@ function block(t: Token): string {
     }
     case "list": {
       const l = t as Tokens.List;
+      if (l.items.some(item => item.task)) {
+        return `<div data-raw-md="${escapeHtml(t.raw.replace(/\s+$/, ""))}"></div>`;
+      }
       const tag = l.ordered ? "ol" : "ul";
       const start = l.ordered && l.start !== 1 && l.start !== "" ? ` start="${l.start}"` : "";
       const items = l.items.map(item => {
-        const inner = item.tokens.filter(x => x.type !== "space").map(x =>
+        const inner = item.tokens.filter(x => x.type !== "space" && x.type !== "checkbox").map(x =>
           x.type === "text" ? `<p>${inline((x as Tokens.Text).tokens ?? [x])}</p>` : block(x)).join("");
         return `<li>${inner || "<p></p>"}</li>`;
       }).join("");
@@ -300,8 +316,8 @@ export function docToMarkdown(doc: JSONNode, original?: { canonical: string[]; b
   let out = original?.prefix ?? "";
   nodes.forEach((_, i) => {
     const last = i === nodes.length - 1;
-    if (used[i] >= 0) {
-      let raw = original!.blocks[used[i]];
+    if (used[i] >= 0 && original && used[i] < original.blocks.length) {
+      let raw = original.blocks[used[i]];
       // Original adjacency keeps the original separator; anything else gets a clean blank line.
       const keepsNeighbour = last ? used[i] === lastIndex : used[i + 1] === used[i] + 1;
       if (!keepsNeighbour) raw = raw.replace(/\s*$/, "") + (last ? "\n" : "\n\n");

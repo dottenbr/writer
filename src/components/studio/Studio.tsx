@@ -577,9 +577,11 @@ export function Studio() {
     if (link && model) {
       const href = link.getAttribute("href") ?? "";
       const editing = !!target.closest("[contenteditable=true]");
-      if (/^[a-z]+:/i.test(href)) {
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
         e.preventDefault();
-        if (!editing || e.metaKey || e.ctrlKey) window.open(href, "_blank", "noopener,noreferrer");
+        if (/^(?:https?|mailto):/i.test(href) && (!editing || e.metaKey || e.ctrlKey)) {
+          window.open(href, "_blank", "noopener,noreferrer");
+        }
         return;
       }
       e.preventDefault();

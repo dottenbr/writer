@@ -87,4 +87,21 @@ describe("markdown document bridge", () => {
   it("flags link definitions as not safely editable", () => {
     expect(markdownToHtml("Text [a][x].\n\n[x]: https://example.com\n").lossless).toBe(false);
   });
+
+  it("round-trips GFM task lists byte-for-byte without crashing", () => {
+    const checklist = `## Pre-publication\n\n- [ ] Cover: final SVG and PNG in \`cover/\`\n- [x] ISBN assigned in \`book.yaml\`\n\n## Final checks\n\n- [ ] \`book check\` passes with zero errors\n`;
+    const { editor, parsed, original } = load(checklist);
+    expect(parsed.lossless).toBe(true);
+    expect(docToMarkdown(editor.getJSON() as JSONNode, original)).toBe(checklist);
+  });
+
+  it("neutralizes unsafe javascript:, data:, and vbscript: links while preserving safe links", () => {
+    const md = `Click [bad](javascript:alert(1)) or [data](data:text/html,<script>alert(1)</script>) or [good](https://bookkit.net/guide) or [rel](../draft/01.md#s1).\n`;
+    const parsed = markdownToHtml(md);
+    expect(parsed.html).toContain('href="#"');
+    expect(parsed.html).not.toContain("javascript:");
+    expect(parsed.html).not.toContain("data:text/html");
+    expect(parsed.html).toContain('href="https://bookkit.net/guide"');
+    expect(parsed.html).toContain('href="../draft/01.md#s1"');
+  });
 });

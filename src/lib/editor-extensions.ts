@@ -10,7 +10,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { marked } from "marked";
 import { CHAPTER_ANCHOR, type Entity } from "./book-model";
-import { escapeHtml } from "./markdown-doc";
+import { escapeHtml, isSafeHref } from "./markdown-doc";
 
 /** Scene breaks and rules keep the exact markup they were written with. */
 const SceneBreak = HorizontalRule.extend({
@@ -60,6 +60,10 @@ export const RawBlock = Node.create({
       if (/^\s*\|/.test(source)) {
         dom.classList.add("raw-md-table");
         dom.innerHTML = String(marked.parse(escapeHtml(source).replace(/&gt;/g, ">").replace(/&quot;/g, '"'), { async: false, gfm: true }));
+        dom.querySelectorAll("a[href]").forEach(a => {
+          const href = a.getAttribute("href") ?? "";
+          if (!isSafeHref(href)) a.setAttribute("href", "#");
+        });
       } else {
         const pre = document.createElement("pre");
         pre.textContent = source;

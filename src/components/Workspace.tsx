@@ -2,14 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { useHomeStore } from "../store/useHomeStore";
-import { createLibraryWithShelves, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook } from "../lib/supabase-service";
+import { createLibraryWithShelves, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook, type WorkspaceInboxThread } from "../lib/supabase-service";
+import { resolveThread } from "../lib/bookkit-collaboration";
+import { useBookStore } from "../store/useBookStore";
 import { generateAndCacheCoverThumbnail, inverseTextColorForTone, readCachedCover, type CachedCoverArt } from "../lib/cover-art";
 import { useLibraryStore, canWriteIn } from "../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../lib/library-host";
 import { LibrarySettings } from "./LibrarySettings";
 import { bookSlug, navFlags, openInNewTab } from "../lib/book-url";
 import { NewBookDialog, UserMenu, useTheme } from "./studio/Studio";
-import { formatWords, Icon } from "./studio/common";
+import { formatWords, Icon, initials } from "./studio/common";
 import { navigatePublic } from "../lib/public-routes";
 
 const DAY = 86400000;
@@ -184,6 +186,8 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   const pct = target ? Math.min(100, Math.round((book.author_words / target) * 100)) : 0;
   const chapters = book.chapters_total || 0;
   const formLabel = book.form_label ?? "Novel";
+  const unresolved = book.unresolved_threads ?? 0;
+  const openComments = book.open_comments ?? 0;
   const week = book.activity.filter(a => Date.parse(a.day) > Date.now() - 7 * DAY);
   const weekWords = week.reduce((n, a) => n + a.added, 0);
   const weekTalk = week.reduce((n, a) => n + a.comments + a.suggestions, 0);
@@ -217,6 +221,14 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
             <div className="ws-progress-row small muted">
               <span>{chapters ? `${book.chapters_written} of ${chapters} chapters` : "No chapters yet"}</span>
               {book.draft_words > 0 && <span>{formatWords(book.draft_words)} in the reference draft</span>}
+            </div>
+            <div className={`ws-book-threads-row ${unresolved > 0 ? "has-open" : "muted"}`}>
+              <span className="ws-book-threads-pill">
+                <Icon name="comment" size={12} />
+                <span>
+                  {unresolved} unresolved thread{unresolved === 1 ? "" : "s"} · {openComments} open comment{openComments === 1 ? "" : "s"}
+                </span>
+              </span>
             </div>
           </div>
         </div>
@@ -258,6 +270,8 @@ function Overview({ books }: { books: WorkspaceBook[] }) {
   const weekTalk = days.slice(-7).reduce((n, d) => n + d.comments + d.suggestions, 0);
   const words = books.reduce((n, b) => n + b.author_words, 0);
   const draftWords = books.reduce((n, b) => n + b.draft_words, 0);
+  const totalUnresolved = books.reduce((n, b) => n + (b.unresolved_threads ?? 0), 0);
+  const totalOpenComments = books.reduce((n, b) => n + (b.open_comments ?? 0), 0);
   let streak = 0;
   for (let i = days.length - 1; i >= 0; i--) { if (days[i].score) streak++; else if (i === days.length - 1) continue; else break; }
   return (
@@ -265,13 +279,222 @@ function Overview({ books }: { books: WorkspaceBook[] }) {
       <div className="ws-stats">
         <div className="ws-stat"><span className="ws-stat-label">Words written</span><strong>{formatWords(words)}</strong><span className="muted">across {books.length} book{books.length === 1 ? "" : "s"}</span></div>
         <div className="ws-stat"><span className="ws-stat-label">This week</span><strong>{weekWords > 0 ? "+" : ""}{formatWords(weekWords)}</strong><span className="muted">words written{weekTalk ? ` · ${weekTalk} comment${weekTalk === 1 ? "" : "s"}` : ""}</span></div>
-        <div className="ws-stat"><span className="ws-stat-label">Active days</span><strong>{activeDays}<span className="ws-of"> / 30</span></strong><span className="muted">{streak > 1 ? `${streak}-day streak` : "in the last month"}</span></div>
-        <div className="ws-stat"><span className="ws-stat-label">Reference drafts</span><strong>{formatWords(draftWords)}</strong><span className="muted">words to write from</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Open conversations</span><strong>{totalUnresolved}</strong><span className="muted">{totalUnresolved === 1 ? "unresolved thread" : "unresolved threads"} · {totalOpenComments} open comment{totalOpenComments === 1 ? "" : "s"}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Reference drafts</span><strong>{formatWords(draftWords)}</strong><span className="muted">{activeDays}/30 active days{streak > 1 ? ` · ${streak}d streak` : ""}</span></div>
       </div>
       <div className="ws-activity">
         <div className="ws-section-head"><h2>Activity</h2><span className="muted">Words written, revisions and comments, last 12 weeks</span></div>
         <ActivityCalendar days={days} />
       </div>
+    </section>
+  );
+}
+
+function formatThreadPage(path: string): string {
+  const clean = path.replace(/\.md$/i, "");
+  const parts = clean.split("/");
+  const last = parts[parts.length - 1] ?? clean;
+  const label = last
+    .replace(/^\d+[-_]/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return parts.length > 1 ? `${parts[0]} / ${label}` : label;
+}
+
+function WorkspaceInbox({
+  books,
+  onOpenThread,
+  onReload,
+}: {
+  books: WorkspaceBook[];
+  onOpenThread: (book: WorkspaceBook, thread: WorkspaceInboxThread, forceNewTab?: boolean) => void;
+  onReload: () => void;
+}) {
+  const userId = useAuthStore((s) => s.userId) ?? "";
+  const [filter, setFilter] = useState<"all" | "attention" | "replies">("all");
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+
+  const bookById = useMemo(() => new Map(books.map((b) => [b.project_id, b])), [books]);
+  const allThreads = useMemo(() => {
+    const list: WorkspaceInboxThread[] = [];
+    for (const b of books) {
+      for (const t of b.inbox_threads ?? []) {
+        list.push(t);
+      }
+    }
+    return list.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+  }, [books]);
+
+  const attentionThreads = useMemo(
+    () => allThreads.filter((t) => !userId || t.latest_author_id !== userId || t.has_reply),
+    [allThreads, userId]
+  );
+  const repliedThreads = useMemo(
+    () => allThreads.filter((t) => t.has_reply),
+    [allThreads]
+  );
+
+  const displayed =
+    filter === "attention"
+      ? attentionThreads
+      : filter === "replies"
+        ? repliedThreads
+        : allThreads;
+
+  const totalOpenComments = allThreads.reduce((s, t) => s + t.message_count, 0);
+
+  const handleResolve = async (e: React.MouseEvent, threadId: string) => {
+    e.stopPropagation();
+    setResolvingId(threadId);
+    try {
+      await resolveThread(threadId, true);
+      onReload();
+    } catch {
+      /* ignore */
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
+  return (
+    <section className="ws-inbox" aria-label="Comments and responses inbox">
+      <div className="ws-inbox-head">
+        <div className="ws-inbox-title-wrap">
+          <h2>Inbox</h2>
+          <span className={`ws-inbox-count-pill ${allThreads.length > 0 ? "has-open" : ""}`}>
+            {allThreads.length} unresolved thread{allThreads.length === 1 ? "" : "s"} · {totalOpenComments} open comment{totalOpenComments === 1 ? "" : "s"}
+          </span>
+        </div>
+        {allThreads.length > 0 && (
+          <div className="ws-inbox-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "all"}
+              className={`chip ${filter === "all" ? "on" : ""}`}
+              onClick={() => setFilter("all")}
+            >
+              All open ({allThreads.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "attention"}
+              className={`chip ${filter === "attention" ? "on" : ""}`}
+              onClick={() => setFilter("attention")}
+            >
+              Needs attention ({attentionThreads.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filter === "replies"}
+              className={`chip ${filter === "replies" ? "on" : ""}`}
+              onClick={() => setFilter("replies")}
+            >
+              With replies ({repliedThreads.length})
+            </button>
+          </div>
+        )}
+      </div>
+
+      {displayed.length === 0 ? (
+        <div className="ws-inbox-empty">
+          <Icon name="comment" size={16} />
+          <span>
+            {allThreads.length === 0
+              ? "All caught up — no unresolved comment threads across your books."
+              : "No open threads match this filter."}
+          </span>
+        </div>
+      ) : (
+        <div className="ws-inbox-list">
+          {displayed.map((t) => {
+            const book = bookById.get(t.project_id);
+            if (!book) return null;
+            const fromOther = Boolean(userId && t.latest_author_id !== userId);
+            return (
+              <div
+                key={t.id}
+                role="button"
+                tabIndex={0}
+                className={`ws-inbox-item ${fromOther ? "needs-look" : ""}`}
+                onClick={() => onOpenThread(book, t, false)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    onOpenThread(book, t, true);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpenThread(book, t, false);
+                  }
+                }}
+              >
+                <div className="ws-inbox-item-top">
+                  <div className="ws-inbox-loc">
+                    <strong className="ws-inbox-book">{t.book_name}</strong>
+                    <span className="ws-inbox-sep">·</span>
+                    <span className="ws-inbox-page">{formatThreadPage(t.path)}</span>
+                  </div>
+                  <div className="ws-inbox-badges">
+                    {fromOther && t.has_reply ? (
+                      <span className="ws-inbox-status attention">
+                        New reply from {t.latest_author_name}
+                      </span>
+                    ) : fromOther ? (
+                      <span className="ws-inbox-status attention">
+                        Comment from {t.author_name}
+                      </span>
+                    ) : t.has_reply ? (
+                      <span className="ws-inbox-status replied">
+                        {t.message_count} comments · replied
+                      </span>
+                    ) : (
+                      <span className="ws-inbox-status">1 open comment</span>
+                    )}
+                    <time className="ws-inbox-time">{ago(t.updated_at)}</time>
+                  </div>
+                </div>
+
+                {t.quoted_text && (
+                  <blockquote className="ws-inbox-quote">“{t.quoted_text}”</blockquote>
+                )}
+
+                <div className="ws-inbox-messages">
+                  <div className="ws-inbox-msg">
+                    <span className="avatar">{initials(t.author_name)}</span>
+                    <span className="ws-inbox-msg-author">{t.author_name}</span>
+                    <span className="ws-inbox-msg-body">{t.first_body}</span>
+                  </div>
+                  {t.has_reply && (
+                    <div className="ws-inbox-msg is-reply">
+                      <span className="avatar">{initials(t.latest_author_name)}</span>
+                      <span className="ws-inbox-msg-author">{t.latest_author_name} replied</span>
+                      <span className="ws-inbox-msg-body">{t.latest_body}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="ws-inbox-actions">
+                  <span className="ws-inbox-open-link">Open in book →</span>
+                  <button
+                    type="button"
+                    data-no-tab
+                    className="btn btn-sm"
+                    disabled={resolvingId === t.id}
+                    onClick={(e) => void handleResolve(e, t.id)}
+                  >
+                    {resolvingId === t.id ? "Resolving…" : "Resolve"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -413,6 +636,45 @@ function useOpenBook() {
   };
 }
 
+/** Open a specific comment thread inside its book and document. */
+function useOpenThread() {
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const currentId = useProjectStore(s => s.currentProjectId);
+  const switchProject = useProjectStore(s => s.switchProject);
+  const setHome = useHomeStore(s => s.setHome);
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  return (b: WorkspaceBook, thread: WorkspaceInboxThread, forceNewTab = false) => {
+    const slug = libraries.find(l => l.id === b.library_id)?.slug ?? null;
+    const bSlug = bookSlug(catalog, b.project_id);
+    const targetUrl = `/${bSlug}/file/${thread.path}?thread=${encodeURIComponent(thread.id)}`;
+    const activeHost = hostLibrary();
+    if (forceNewTab || navFlags.openInNewTab) {
+      navFlags.openInNewTab = false;
+      openInNewTab(activeHost && slug !== activeHost ? libraryUrl(slug, targetUrl) : targetUrl);
+      return;
+    }
+    if (activeHost && slug !== activeHost) {
+      window.location.href = libraryUrl(slug, targetUrl);
+      return;
+    }
+    if (!activeHost && slug !== selectedSlug) selectLibrary(slug);
+    navFlags.openLastPlace = false;
+    window.history.pushState(null, "", targetUrl);
+    useBookStore.getState().setPanel("comments");
+    useBookStore.getState().setActiveThread(thread.id);
+    setHome(false);
+    if (b.project_id !== currentId) {
+      void switchProject(b.project_id);
+    } else {
+      useBookStore.getState().go(thread.path, {
+        find: thread.quoted_text ? thread.quoted_text.slice(0, 120) : undefined,
+      });
+    }
+  };
+}
+
 /** Shelf, library and privacy for one book, from its card. */
 function BookMenu({ book, library, onChanged }: { book: WorkspaceBook; library: Library; onChanged: () => void }) {
   const libraries = useLibraryStore(s => s.libraries) ?? [];
@@ -466,6 +728,7 @@ function LibraryHome({ library }: { library: Library }) {
   const email = useAuthStore(s => s.userEmail) ?? "";
   const { books, error, reload } = useBooks();
   const open = useOpenBook();
+  const openThread = useOpenThread();
   const reloadLibraries = useLibraryStore(s => s.load);
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -504,6 +767,7 @@ function LibraryHome({ library }: { library: Library }) {
         {error && <div className="inline-error" role="alert">Couldn’t load the books: {error}</div>}
         {!books && !error && <div className="studio-message"><span className="spinner" /> Loading the shelves…</div>}
         {books && all.length > 0 && <Overview books={all} />}
+        {books && all.length > 0 && <WorkspaceInbox books={all} onOpenThread={openThread} onReload={reload} />}
         {books && all.length > 3 && (
           <div className="ws-filter"><Icon name="search" size={14} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a book" aria-label="Find a book" /></div>
         )}
@@ -633,8 +897,9 @@ function NewLibraryDialog({ onClose }: { onClose: () => void }) {
 function AllLibraries() {
   const email = useAuthStore(s => s.userEmail) ?? "";
   const libraries = useLibraryStore(s => s.libraries) ?? [];
-  const { books, error } = useBooks();
+  const { books, error, reload } = useBooks();
   const open = useOpenBook();
+  const openThread = useOpenThread();
   const [creating, setCreating] = useState(false);
   const [newLibrary, setNewLibrary] = useState(false);
   const importProjectZip = useProjectStore(s => s.importProjectZip);
@@ -663,6 +928,7 @@ function AllLibraries() {
           </section>
         )}
         {books && all.length > 0 && <Overview books={all.some(b => b.role === "owner") ? all.filter(b => b.role === "owner") : all} />}
+        {books && all.length > 0 && <WorkspaceInbox books={all} onOpenThread={openThread} onReload={reload} />}
         {recent.length > 0 && (
           <section className="ws-shelf">
             <div className="ws-section-head"><h2>Recently worked on</h2></div>

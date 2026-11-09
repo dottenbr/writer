@@ -5,6 +5,7 @@ import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig } from "..
 import { SceneCardInline } from "./SceneCardInline";
 import { docToMarkdown, escapeHtml, markdownToHtml, nodeToMarkdown, type JSONNode } from "../../lib/markdown-doc";
 import { useBookStore } from "../../store/useBookStore";
+import { useEditorBus } from "./editorBus";
 import { parseScenes } from "../../lib/scene-cards";
 
 export interface RichEditorHandle {
@@ -51,7 +52,11 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
     },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection;
-      onSelectionRef.current?.(from === to ? "" : editor.state.doc.textBetween(from, to, "\n"));
+      if (from === to) {
+        if (editor.isFocused) onSelectionRef.current?.("");
+      } else {
+        onSelectionRef.current?.(editor.state.doc.textBetween(from, to, "\n"));
+      }
       force(x => x + 1);
     },
   });
@@ -169,7 +174,11 @@ export function StaticProse({ body, className, onActivate, matcher, scenesPath }
   const count = useMemo(() => (scenesFile ? parseScenes(scenesFile).length : 0), [scenesFile]);
   const activate = (e: React.MouseEvent) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey) return;
-    if (window.getSelection()?.toString()) return;
+    const sel = window.getSelection()?.toString().trim();
+    if (sel) {
+      useEditorBus.getState().setSelection(sel);
+      return;
+    }
     if ((e.target as HTMLElement).closest("[data-entity],[data-chapters],a,.scene-inline")) return;
     onActivate?.({ x: e.clientX, y: e.clientY });
   };

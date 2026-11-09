@@ -223,12 +223,14 @@ function CommentsTab({ path }: { path: string }) {
   const session = useEditorBus(s => s.session);
   const commentQuote = useEditorBus(s => s.commentQuote);
   const selection = useEditorBus(s => s.selection);
+  const setDraftQuote = useEditorBus(s => s.setDraftQuote);
   const go = useBookStore(s => s.go);
   const setActiveThread = useBookStore(s => s.setActiveThread);
   const activeThread = useBookStore(s => s.activeThread);
   const storageKey = JSON.stringify(["writer-comment-draft", userId, projectId, path]);
   const [body, setBody] = useState(() => { try { return localStorage.getItem(storageKey) ?? ""; } catch { return ""; } });
-  const [quote, setQuote] = useState("");
+  const [quote, setQuote] = useState(() => selection.trim());
+  const dismissedSelectionRef = useRef<string>("");
   const [replies, setReplies] = useState<Record<string, string>>({});
   const [showResolved, setShowResolved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -238,13 +240,31 @@ function CommentsTab({ path }: { path: string }) {
 
   useEffect(() => { void loadReview(path).catch(() => {}); }, [path, loadReview]);
   useEffect(() => { try { if (body) localStorage.setItem(storageKey, body); else localStorage.removeItem(storageKey); } catch { /* ignore */ } }, [storageKey, body]);
+  useEffect(() => {
+    const trimmed = selection.trim();
+    if (trimmed && trimmed !== dismissedSelectionRef.current) {
+      setQuote(trimmed);
+    }
+  }, [selection]);
+  useEffect(() => {
+    setDraftQuote(quote);
+    return () => setDraftQuote("");
+  }, [quote, setDraftQuote]);
   const mountedNonce = useRef(commentQuote && Date.now() - commentQuote.at > 1500 ? commentQuote.nonce : 0);
   useEffect(() => {
     if (!commentQuote || commentQuote.nonce <= mountedNonce.current) return;
     mountedNonce.current = commentQuote.nonce;
-    setQuote(commentQuote.text);
+    if (commentQuote.text.trim()) {
+      dismissedSelectionRef.current = "";
+      setQuote(commentQuote.text.trim());
+    }
     setTimeout(() => composer.current?.focus(), 50);
   }, [commentQuote]);
+  useEffect(() => {
+    if (!activeThread || !review) return;
+    const el = document.getElementById(`thread-${activeThread}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activeThread, review]);
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true); setError("");
@@ -258,14 +278,43 @@ function CommentsTab({ path }: { path: string }) {
     <div className="panel-stack comments">
       {error && <div className="inline-error" role="alert">{error}</div>}
       <section className="composer">
-        {quote && <blockquote className="composer-quote">{quote}<button className="icon-btn" onClick={() => setQuote("")} aria-label="Remove quote"><Icon name="close" size={12} /></button></blockquote>}
-        {!quote && selection && <button className="link-btn" onClick={() => setQuote(selection)}>Quote the selected text</button>}
+        {quote && (
+          <blockquote className="composer-quote">
+            <span className="composer-quote-text">“{quote}”</span>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => {
+                dismissedSelectionRef.current = selection.trim();
+                setQuote("");
+              }}
+              aria-label="Remove quote"
+              title="Remove highlighted quote"
+            >
+              <Icon name="close" size={12} />
+            </button>
+          </blockquote>
+        )}
+        {!quote && selection && (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              dismissedSelectionRef.current = "";
+              setQuote(selection.trim());
+            }}
+          >
+            Quote the selected text
+          </button>
+        )}
         {discussing && <div className="panel-note">Discussing a suggestion <button className="link-btn" onClick={() => setDiscussing(null)}>Cancel</button></div>}
-        <textarea ref={composer} value={body} maxLength={20000} onChange={e => setBody(e.target.value)} placeholder={role === "viewer" ? "Leave a comment for the author" : "Add a comment…"} aria-label="New comment" onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") (e.currentTarget.nextElementSibling as HTMLButtonElement)?.click(); }} />
+        <textarea ref={composer} value={body} maxLength={20000} onChange={e => setBody(e.target.value)} placeholder={role === "viewer" ? "Leave a comment for the author" : quote ? "Comment on the highlighted passage…" : "Select text to highlight & comment, or leave a note on this page…"} aria-label="New comment" onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") (e.currentTarget.nextElementSibling as HTMLButtonElement)?.click(); }} />
         <button className="btn btn-primary btn-sm" disabled={busy || !body.trim() || !projectId} onClick={() => void act(async () => {
+          const effectiveQuote = discussing ? "" : (quote.trim() || (selection.trim() !== dismissedSelectionRef.current ? selection.trim() : ""));
           const raw = session?.text ?? "";
-          const start = quote ? raw.indexOf(quote) : -1;
-          await createThread(projectId!, path, body, discussing ? "" : quote, discussing || start < 0 ? null : start, session?.row?.revision_id ?? null, discussing);
+          const start = effectiveQuote ? raw.indexOf(effectiveQuote) : -1;
+          await createThread(projectId!, path, body, effectiveQuote, discussing || start < 0 ? null : start, session?.row?.revision_id ?? null, discussing);
+          dismissedSelectionRef.current = selection.trim();
           setBody(""); setQuote(""); setDiscussing(null);
         })}>Comment</button>
       </section>
@@ -295,8 +344,37 @@ function CommentsTab({ path }: { path: string }) {
         {!review && <div className="muted">Loading…</div>}
         {review && threads.length === 0 && <div className="muted empty-comments">No comments yet. Select text in the page and press Comment.</div>}
         {threads.map(t => (
-          <article key={t.id} className={`thread ${t.resolved_at ? "resolved" : ""} ${activeThread === t.id ? "active" : ""}`} onMouseEnter={() => setActiveThread(t.id)} onMouseLeave={() => setActiveThread(undefined)}>
-            {t.quoted_text && <button className="thread-quote" onClick={() => go(path, { find: t.quoted_text.slice(0, 120) })}>{t.quoted_text}</button>}
+          <article
+            key={t.id}
+            id={`thread-${t.id}`}
+            className={`thread ${t.resolved_at ? "resolved" : ""} ${activeThread === t.id ? "active" : ""}`}
+            onMouseEnter={() => setActiveThread(t.id)}
+            onMouseLeave={() => setActiveThread(undefined)}
+            onClick={e => {
+              if ((e.target as HTMLElement).closest("input,button,textarea,a")) return;
+              setActiveThread(t.id);
+              const mark = document.querySelector(`.bk-comment[data-thread="${t.id}"]`);
+              if (mark) mark.scrollIntoView({ behavior: "smooth", block: "center" });
+              else if (t.quoted_text) go(path, { find: t.quoted_text.slice(0, 120) });
+            }}
+          >
+            {t.quoted_text && (
+              <button
+                type="button"
+                className="thread-quote"
+                title="Jump to highlighted passage in the page"
+                onClick={() => {
+                  setActiveThread(t.id);
+                  const mark = document.querySelector(`.bk-comment[data-thread="${t.id}"]`);
+                  if (mark) mark.scrollIntoView({ behavior: "smooth", block: "center" });
+                  else go(path, { find: t.quoted_text.slice(0, 120) });
+                }}
+              >
+                <span className="thread-quote-mark">“</span>
+                <span className="thread-quote-text">{t.quoted_text}</span>
+                <span className="thread-quote-mark">”</span>
+              </button>
+            )}
             {t.suggestion_id && <div className="panel-note">On a suggested edit</div>}
             {t.bookkit_messages.map(m => (
               <div key={m.id} className="thread-msg">

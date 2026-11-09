@@ -53,7 +53,7 @@ export function parseMoodLayout(tags: string[]): MoodItemLayout | null {
   return {
     x: Math.max(0, Math.round(map.x)),
     y: Math.max(0, Math.round(map.y)),
-    w: Math.max(120, Math.min(820, Math.round(map.w))),
+    w: Math.max(100, Math.min(1400, Math.round(map.w))),
     z: Math.max(1, Math.round(map.z ?? 1)),
   };
 }

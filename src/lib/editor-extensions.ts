@@ -114,11 +114,26 @@ function decorationsForBlock(node: PMNode, pos: number, config: LinkConfig, deco
   for (const c of config.comments ?? []) {
     const q = c.quote.trim();
     if (q.length < 2) continue;
-    let at = text.indexOf(q);
-    while (at >= 0) {
-      const [from, to] = range(at, at + q.length);
-      decos.push(Decoration.inline(from, to, { class: c.active ? "bk-comment active" : "bk-comment", "data-thread": c.id }));
-      at = text.indexOf(q, at + q.length);
+    const segments = q.includes("\n")
+      ? q.split(/\n+/).map(s => s.trim()).filter(s => s.length >= 3)
+      : [q];
+    for (const seg of segments) {
+      let at = text.indexOf(seg);
+      if (at < 0) {
+        const lowerIdx = text.toLowerCase().indexOf(seg.toLowerCase());
+        if (lowerIdx >= 0) at = lowerIdx;
+      }
+      while (at >= 0) {
+        const [from, to] = range(at, at + seg.length);
+        decos.push(
+          Decoration.inline(from, to, {
+            class: c.active ? "bk-comment active" : "bk-comment",
+            "data-thread": c.id,
+            title: "Click to view comment",
+          })
+        );
+        at = text.indexOf(seg, at + seg.length);
+      }
     }
   }
   if (config.flash) {

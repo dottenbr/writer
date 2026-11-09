@@ -80,11 +80,11 @@ function computeDefaultLayouts(
   canvasWidth: number,
   aspectById: Record<string, number>
 ): Record<string, MoodItemLayout> {
-  const safeWidth = Math.max(360, canvasWidth || 1080);
-  const colTarget = safeWidth < 640 ? 1 : safeWidth < 960 ? 2 : safeWidth < 1320 ? 3 : 4;
-  const gap = 28;
-  const padX = 24;
-  const padY = 20;
+  const safeWidth = Math.max(360, canvasWidth || 1280);
+  const colTarget = safeWidth < 640 ? 1 : safeWidth < 960 ? 2 : safeWidth < 1320 ? 3 : safeWidth < 1720 ? 4 : 5;
+  const gap = 24;
+  const padX = 8;
+  const padY = 12;
   const colWidth = Math.max(220, Math.floor((safeWidth - padX * 2 - gap * (colTarget - 1)) / colTarget));
   const colHeights = new Array<number>(colTarget).fill(padY);
   const result: Record<string, MoodItemLayout> = {};
@@ -108,9 +108,9 @@ function computeDefaultLayouts(
     }
 
     const presetW = DEFAULT_WIDTHS[index % DEFAULT_WIDTHS.length];
-    const w = colTarget === 1 ? Math.min(safeWidth - 32, 340) : Math.min(colWidth + 16, presetW);
-    const jitterX = colTarget > 1 ? ((index * 17) % 14) - 7 : 0;
-    const x = Math.max(12, padX + shortestCol * (colWidth + gap) + jitterX);
+    const w = colTarget === 1 ? Math.min(safeWidth - 24, 340) : Math.min(colWidth + 16, presetW);
+    const jitterX = colTarget > 1 ? ((index * 17) % 12) - 6 : 0;
+    const x = Math.max(0, padX + shortestCol * (colWidth + gap) + jitterX);
     const y = Math.round(colHeights[shortestCol]);
     const ratio = aspectById[item.id] ?? 0.78;
     const estHeight = Math.round(w * ratio);
@@ -127,9 +127,13 @@ function computeDefaultLayouts(
   return result;
 }
 
+type ResizeDirection = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+const RESIZE_DIRECTIONS: ResizeDirection[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+
 function MoodBoardPiece({
   item,
   layout,
+  aspectRatio,
   projectId,
   canEdit,
   isSelected,
@@ -148,6 +152,7 @@ function MoodBoardPiece({
 }: {
   item: InspirationItem;
   layout: MoodItemLayout;
+  aspectRatio: number;
   projectId: string;
   canEdit: boolean;
   isSelected: boolean;
@@ -248,21 +253,65 @@ function MoodBoardPiece({
     window.addEventListener("pointerup", handleUp);
   };
 
-  const handleResizePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+  const handleResizePointerDown = (dir: ResizeDirection, e: React.PointerEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     e.preventDefault();
     const startX = e.clientX;
+    const startY = e.clientY;
     const origW = effective.w;
     const origX = effective.x;
     const origY = effective.y;
+    const ratio = Math.max(0.25, aspectRatio || 0.78);
+    const origH = origW * ratio;
+    const rightEdge = origX + origW;
+    const bottomEdge = origY + origH;
     const nextZ = onBringToFront(item.id);
     let latest: MoodItemLayout = { x: origX, y: origY, w: origW, z: nextZ };
     setIsInteracting(true);
 
+    const clampW = (val: number) => Math.max(100, Math.min(1400, Math.round(val)));
+
     const handleMove = (moveEvent: PointerEvent) => {
       const dx = moveEvent.clientX - startX;
-      const nextW = Math.max(140, Math.min(780, Math.round(origW + dx)));
-      latest = { x: origX, y: origY, w: nextW, z: nextZ };
+      const dy = moveEvent.clientY - startY;
+      const dyAsW = dy / ratio;
+
+      let nextW = origW;
+      let nextX = origX;
+      let nextY = origY;
+
+      if (dir === "e") {
+        nextW = clampW(origW + dx);
+      } else if (dir === "w") {
+        nextW = clampW(Math.min(rightEdge, origW - dx));
+        nextX = Math.max(0, Math.round(rightEdge - nextW));
+      } else if (dir === "s") {
+        nextW = clampW(origW + dyAsW);
+      } else if (dir === "n") {
+        const maxWByTop = bottomEdge / ratio;
+        nextW = clampW(Math.min(maxWByTop, origW - dyAsW));
+        nextY = Math.max(0, Math.round(bottomEdge - nextW * ratio));
+      } else if (dir === "se") {
+        const dw = Math.abs(dx) >= Math.abs(dyAsW) ? dx : dyAsW;
+        nextW = clampW(origW + dw);
+      } else if (dir === "sw") {
+        const dw = Math.abs(dx) >= Math.abs(dyAsW) ? -dx : dyAsW;
+        nextW = clampW(Math.min(rightEdge, origW + dw));
+        nextX = Math.max(0, Math.round(rightEdge - nextW));
+      } else if (dir === "ne") {
+        const dw = Math.abs(dx) >= Math.abs(dyAsW) ? dx : -dyAsW;
+        const maxWByTop = bottomEdge / ratio;
+        nextW = clampW(Math.min(maxWByTop, origW + dw));
+        nextY = Math.max(0, Math.round(bottomEdge - nextW * ratio));
+      } else if (dir === "nw") {
+        const dw = Math.abs(dx) >= Math.abs(dyAsW) ? -dx : -dyAsW;
+        const maxWByTop = bottomEdge / ratio;
+        nextW = clampW(Math.min(rightEdge, maxWByTop, origW + dw));
+        nextX = Math.max(0, Math.round(rightEdge - nextW));
+        nextY = Math.max(0, Math.round(bottomEdge - nextW * ratio));
+      }
+
+      latest = { x: nextX, y: nextY, w: nextW, z: nextZ };
       setLivePos(latest);
     };
 
@@ -279,7 +328,7 @@ function MoodBoardPiece({
   };
 
   const handleScaleChange = (nextWidth: number) => {
-    const clamped = Math.max(140, Math.min(780, Math.round(nextWidth)));
+    const clamped = Math.max(100, Math.min(1400, Math.round(nextWidth)));
     const nextLayout: MoodItemLayout = {
       x: effective.x,
       y: effective.y,
@@ -342,13 +391,16 @@ function MoodBoardPiece({
           </span>
         )}
 
-        <button
-          type="button"
-          className="insp-resize-handle"
-          aria-label={`Scale ${item.label}`}
-          title="Drag corner to scale"
-          onPointerDown={handleResizePointerDown}
-        />
+        {RESIZE_DIRECTIONS.map((dir) => (
+          <button
+            key={dir}
+            type="button"
+            className={`insp-resize-handle insp-resize-${dir}`}
+            aria-label={dir === "se" ? `Scale ${item.label}` : `Scale ${item.label} (${dir})`}
+            title="Drag any edge or corner to scale"
+            onPointerDown={(e) => handleResizePointerDown(dir, e)}
+          />
+        ))}
       </div>
 
       {isSelected && (
@@ -398,8 +450,8 @@ function MoodBoardPiece({
             </button>
             <input
               type="range"
-              min={140}
-              max={720}
+              min={100}
+              max={1200}
               step={10}
               value={effective.w}
               aria-label="Picture width"
@@ -939,6 +991,7 @@ export function Inspiration() {
                 key={item.id}
                 item={item}
                 layout={layout}
+                aspectRatio={aspectById[item.id] ?? 0.78}
                 projectId={projectId}
                 canEdit={canEdit}
                 isSelected={selectedId === item.id}

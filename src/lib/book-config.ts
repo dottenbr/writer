@@ -37,10 +37,9 @@ export interface BookFormMeta {
 
 /** Customary literary forms and their default book/chapter word-count goals. */
 export const BOOK_FORMS: BookFormMeta[] = [
-  { value: "novel", label: "Novel", eyebrow: "A novel", kind: "fiction", defaultTargetWords: 80000, defaultChapterWords: 3500, rangeLabel: "50,000–120,000 words" },
-  { value: "short-novel", label: "Short novel", eyebrow: "A short novel", kind: "fiction", defaultTargetWords: 45000, defaultChapterWords: 2500, rangeLabel: "35,000–55,000 words" },
-  { value: "novella", label: "Novella", eyebrow: "A novella", kind: "fiction", defaultTargetWords: 25000, defaultChapterWords: 2000, rangeLabel: "15,000–40,000 words" },
-  { value: "novelette", label: "Novelette", eyebrow: "A novelette", kind: "fiction", defaultTargetWords: 12000, defaultChapterWords: 2000, rangeLabel: "7,500–17,500 words" },
+  { value: "novel", label: "Novel", eyebrow: "A novel", kind: "fiction", defaultTargetWords: 80000, defaultChapterWords: 3500, rangeLabel: "35,000–120,000 words" },
+  { value: "novella", label: "Novella", eyebrow: "A novella", kind: "fiction", defaultTargetWords: 25000, defaultChapterWords: 2000, rangeLabel: "15,000–35,000 words" },
+  { value: "novelette", label: "Novelette", eyebrow: "A novelette", kind: "fiction", defaultTargetWords: 12000, defaultChapterWords: 2000, rangeLabel: "7,500–15,000 words" },
   { value: "short-story", label: "Short story", eyebrow: "A short story", kind: "fiction", defaultTargetWords: 5000, defaultChapterWords: 5000, rangeLabel: "1,000–7,500 words" },
   { value: "collection", label: "Story collection", eyebrow: "Stories", kind: "fiction", defaultTargetWords: 60000, defaultChapterWords: 4000, rangeLabel: "40,000–80,000 words" },
   { value: "nonfiction", label: "General nonfiction", eyebrow: "Nonfiction", kind: "nonfiction", defaultTargetWords: 70000, defaultChapterWords: 4000, rangeLabel: "50,000–100,000 words" },
@@ -52,8 +51,9 @@ export const BOOK_FORMS: BookFormMeta[] = [
 ];
 
 export function formMeta(form: string | null | undefined, kind: BookKind = "fiction"): BookFormMeta {
+  const normalized = form === "short-novel" ? "novel" : form;
   return (
-    BOOK_FORMS.find(f => f.value === form) ??
+    BOOK_FORMS.find(f => f.value === normalized) ??
     BOOK_FORMS.find(f => f.value === (kind === "nonfiction" ? "nonfiction" : "novel"))!
   );
 }

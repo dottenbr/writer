@@ -33,6 +33,7 @@ export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initial
   const setBusEditor = useEditorBus(s => s.setEditor);
   const setBusSession = useEditorBus(s => s.setSession);
   const setSelection = useEditorBus(s => s.setSelection);
+  const draftQuote = useEditorBus(s => s.draftQuote);
   const activeThread = useBookStore(s => s.activeThread);
   const scenesFile = useBookStore(s => (scenesPath ? s.files.find(f => f.path === scenesPath)?.content : undefined));
   const sceneCount = useMemo(() => (scenesFile ? parseScenes(scenesFile).length : 0), [scenesFile]);
@@ -49,14 +50,22 @@ export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initial
   const split = useMemo(() => splitDocument(session.text), [session.text]);
   const lossless = useMemo(() => markdownToHtml(split.body).lossless, [split.body]);
 
-  const links = useMemo(() => ({
-    entities: matcher,
-    chapterAnchors,
-    comments: (review?.threads ?? []).filter(t => !t.resolved_at && t.quoted_text).map(t => ({ id: t.id, quote: t.quoted_text, active: t.id === activeThread })),
-    flash: find,
-  }), [matcher, chapterAnchors, review, find, activeThread]);
+  const links = useMemo(() => {
+    const comments = (review?.threads ?? [])
+      .filter(t => !t.resolved_at && t.quoted_text)
+      .map(t => ({ id: t.id, quote: t.quoted_text, active: t.id === activeThread }));
+    if (draftQuote.trim()) {
+      comments.push({ id: "__draft__", quote: draftQuote.trim(), active: true });
+    }
+    return {
+      entities: matcher,
+      chapterAnchors,
+      comments,
+      flash: find,
+    };
+  }, [matcher, chapterAnchors, review, find, activeThread, draftQuote]);
 
-  // Scroll to a requested heading or found text once the document is in place.
+  // Scroll to a requested heading, found text, or active comment thread once the document is in place.
   useEffect(() => {
     if (session.state === "loading") return;
     const timer = setTimeout(() => {

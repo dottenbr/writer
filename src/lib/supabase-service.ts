@@ -2094,6 +2094,24 @@ export async function setAccountPassword(password: string): Promise<void> {
   if (error) throw error;
 }
 
+export interface WorkspaceInboxThread {
+  id: string;
+  project_id: string;
+  book_name: string;
+  path: string;
+  quoted_text: string;
+  created_at: string;
+  updated_at: string;
+  author_id: string;
+  author_name: string;
+  latest_author_id: string;
+  latest_author_name: string;
+  first_body: string;
+  latest_body: string;
+  message_count: number;
+  has_reply: boolean;
+}
+
 export interface WorkspaceBook {
   project_id: string;
   name: string;
@@ -2116,6 +2134,9 @@ export interface WorkspaceBook {
   cover_tone?: CoverTone | null;
   book_form?: BookForm;
   form_label?: string;
+  unresolved_threads?: number;
+  open_comments?: number;
+  inbox_threads?: WorkspaceInboxThread[];
 }
 
 const syncedMetadataProjects = new Set<string>();
@@ -2134,6 +2155,7 @@ function resolveBookFormAndTarget(
   const chaptersCount = Math.max(1, book.chapters_total || 1);
   let hasExplicitForm = false;
   let hasExplicitTarget = false;
+  let hadLegacyForm = false;
   let kind: "fiction" | "nonfiction" = "fiction";
   let subtitle = "";
   let explicitForm: BookForm | null = null;
@@ -2143,16 +2165,25 @@ function resolveBookFormAndTarget(
   if (yamlContent) {
     hasExplicitForm = /^form\s*:/m.test(yamlContent);
     hasExplicitTarget = /^\s+target_words\s*:/m.test(yamlContent);
+    hadLegacyForm = /^form\s*:\s*short-novel\b/m.test(yamlContent);
     try {
       const cfg = readConfig(yamlContent);
       kind = cfg.kind;
       subtitle = cfg.subtitle || "";
-      if (hasExplicitForm) explicitForm = cfg.form;
+      if (hasExplicitForm && !hadLegacyForm) explicitForm = cfg.form;
       if (cfg.targetWords && cfg.targetWords > 0) explicitTarget = cfg.targetWords;
       if (cfg.chapterWords && cfg.chapterWords > 0) explicitChapter = cfg.chapterWords;
     } catch {
       /* ignore malformed yaml */
     }
+  }
+
+  // Repair books where an earlier truncated word count misclassified a >30k novel as a short story
+  if (explicitForm === "short-story" && refWords > 30000) {
+    explicitForm = "novel";
+    explicitTarget = null;
+    explicitChapter = null;
+    hadLegacyForm = true;
   }
 
   let form: BookForm = explicitForm ?? "novel";
@@ -2169,7 +2200,6 @@ function resolveBookFormAndTarget(
       if (refWords <= 7500) form = "short-story";
       else if (refWords <= 14000) form = "novelette";
       else if (refWords <= 30000) form = "novella";
-      else if (refWords < 55000) form = "short-novel";
       else form = "novel";
     }
   }
@@ -2194,13 +2224,15 @@ function resolveBookFormAndTarget(
     formLabel,
     targetWords,
     chapterWords,
-    needsSync: Boolean(yamlContent) && (!hasExplicitForm || !hasExplicitTarget || book.target_words === 80000),
+    needsSync:
+      Boolean(yamlContent) &&
+      (!hasExplicitForm || !hasExplicitTarget || hadLegacyForm || book.target_words === 80000),
   };
 }
 
 /** Every book you can open, with progress and daily activity for the workspace. */
 export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
-  const [{ data, error }, inspRes, yamlRes] = await Promise.all([
+  const [{ data, error }, inspRes, yamlRes, threadsRes] = await Promise.all([
     supabase.rpc("bookkit_workspace", { p_days: days }),
     Promise.resolve()
       .then(() =>
@@ -2218,6 +2250,15 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
           .eq("path", "book.yaml")
       )
       .catch(() => ({ data: null })),
+    Promise.resolve()
+      .then(() =>
+        supabase
+          .from("bookkit_threads")
+          .select("id, project_id, path, author_id, quoted_text, created_at, resolved_at, bookkit_messages(id, author_id, body, created_at, profiles!author_id(display_name, email))")
+          .is("resolved_at", null)
+          .order("created_at", { ascending: false })
+      )
+      .catch(() => ({ data: null })),
   ]);
   if (error) throw error;
   const books = (data ?? []) as WorkspaceBook[];
@@ -2231,6 +2272,55 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
     content: string;
     version: number;
   }>;
+  const threadRows = (threadsRes?.data ?? []) as Array<{
+    id: string;
+    project_id: string;
+    path: string;
+    author_id: string;
+    quoted_text: string | null;
+    created_at: string;
+    resolved_at: string | null;
+    bookkit_messages?: Array<{
+      id: string;
+      author_id: string;
+      body: string;
+      created_at: string;
+      profiles?: { display_name?: string | null; email?: string | null } | null;
+    }> | null;
+  }>;
+
+  const bookNameById = new Map<string, string>(books.map((b) => [b.project_id, b.name]));
+  const threadsByProject = new Map<string, WorkspaceInboxThread[]>();
+  for (const row of threadRows) {
+    if (!row?.project_id || row.resolved_at) continue;
+    const msgs = [...(row.bookkit_messages ?? [])].sort(
+      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)
+    );
+    const first = msgs[0];
+    const latest = msgs[msgs.length - 1] ?? first;
+    const displayName = (p?: { display_name?: string | null; email?: string | null } | null) =>
+      p?.display_name?.trim() || p?.email?.trim() || "Collaborator";
+    const threadItem: WorkspaceInboxThread = {
+      id: row.id,
+      project_id: row.project_id,
+      book_name: bookNameById.get(row.project_id) ?? "Book",
+      path: row.path,
+      quoted_text: row.quoted_text ?? "",
+      created_at: row.created_at,
+      updated_at: latest?.created_at ?? row.created_at,
+      author_id: first?.author_id ?? row.author_id,
+      author_name: displayName(first?.profiles),
+      latest_author_id: latest?.author_id ?? row.author_id,
+      latest_author_name: displayName(latest?.profiles),
+      first_body: first?.body ?? "",
+      latest_body: latest?.body ?? "",
+      message_count: Math.max(1, msgs.length),
+      has_reply: msgs.length > 1,
+    };
+    const list = threadsByProject.get(row.project_id) ?? [];
+    list.push(threadItem);
+    threadsByProject.set(row.project_id, list);
+  }
 
   const byProject = new Map<string, Array<{ fileName: string; tags: string[] | null }>>();
   for (const row of inspRows) {
@@ -2252,6 +2342,9 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
     const picked = items && items.length > 0 ? pickBookCoverItem(items) : null;
     const yamlRow = yamlByProject.get(book.project_id) ?? null;
     const resolved = resolveBookFormAndTarget(book, yamlRow?.content ?? null);
+    const openThreads = threadsByProject.get(book.project_id) ?? [];
+    const unresolvedCount = openThreads.length;
+    const openCommentsCount = openThreads.reduce((sum, t) => sum + t.message_count, 0);
 
     if (
       resolved.needsSync &&
@@ -2285,6 +2378,9 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
       target_words: resolved.targetWords,
       book_form: resolved.form,
       form_label: resolved.formLabel,
+      unresolved_threads: unresolvedCount,
+      open_comments: openCommentsCount,
+      inbox_threads: openThreads,
       ...(picked
         ? {
             cover_file: picked.item.fileName,

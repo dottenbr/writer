@@ -14,8 +14,9 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } from "./common";
 import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
 import { BOOK_FORMS, formMeta, type BookForm } from "../../lib/book-config";
-import { saveBookDocument, createBook, setAccountPassword } from "../../lib/supabase-service";
+import { saveBookDocument, createBook, setAccountPassword, placeBook, readBookPlacement } from "../../lib/supabase-service";
 import { navigatePublic } from "../../lib/public-routes";
+import { Collaboration } from "../Collaboration";
 
 /**
  * Lazy views. After a new release the old chunk files are gone, so a tab that
@@ -423,6 +424,11 @@ function useUrlSync() {
   useEffect(() => {
     if (!model || !bookProject || applied.current === bookProject) return;
     applied.current = bookProject;
+    const threadParam = new URLSearchParams(window.location.search).get("thread");
+    if (threadParam) {
+      useBookStore.getState().setPanel("comments", true);
+      useBookStore.getState().setActiveThread(threadParam);
+    }
     if (navFlags.openLastPlace) { navFlags.openLastPlace = false; replaceNext.current = true; return; }
     if (bookIdForSlug(catalog, urlBookSlug()) === bookProject) {
       const route = urlToRoute(window.location.pathname, window.location.hash, model);
@@ -519,7 +525,66 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
+export function ShareDialog({ onClose }: { onClose: () => void }) {
+  const model = useBookStore(s => s.model);
+  const { isOwner, projectId } = useAccess();
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const [place, setPlace] = useState<{ library_id: string | null; shelf_id: string | null; private: boolean } | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (projectId) readBookPlacement(projectId).then(setPlace).catch(e => setError(e.message));
+  }, [projectId]);
+
+  const library = libraries.find(l => l.id === place?.library_id);
+  const people = (library?.members.length ?? 0) + (library ? 1 : 0);
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="dialog share-dialog" role="dialog" aria-label="Share book">
+        <div className="share-dialog-head">
+          <div>
+            <h2>Share “{model?.title ?? "this book"}”</h2>
+            <p className="dialog-sub">Co-authors and editors suggest changes that you accept or reject. Viewers can read and comment.</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="close" size={16} /></button>
+        </div>
+        {place && library && (
+          <label className="check-row share-privacy-row">
+            <input
+              type="checkbox"
+              checked={place.private}
+              disabled={!isOwner}
+              onChange={async e => {
+                if (!projectId) return;
+                setError("");
+                try {
+                  await placeBook(projectId, { private: e.target.checked });
+                  const next = await readBookPlacement(projectId);
+                  setPlace(next);
+                  void reloadLibraries();
+                } catch (err) {
+                  setError((err as Error).message);
+                }
+              }}
+            />
+            <span>
+              <strong>Private to invited people</strong> — {place.private ? `The ${people} people in ${library.name} don’t see this book unless invited below.` : `Everyone in ${library.name} can open this book with their library role.`}
+            </span>
+          </label>
+        )}
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <Collaboration />
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function UserMenu({ theme, setTheme, onOpenShare }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void; onOpenShare?: () => void }) {
   const email = useAuthStore(s => s.userEmail) ?? "";
   const signOut = useAuthStore(s => s.signOut);
   const setShowApiSettings = useProjectStore(s => s.setShowApiSettings);
@@ -540,7 +605,8 @@ export function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setThem
         <div className="menu menu-right">
           <div className="menu-label">{email}</div>
           <button className="menu-item" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} size={15} /> {theme === "dark" ? "Light" : "Dark"} appearance</button>
-          <button className="menu-item" onClick={() => { setOpen(false); useBookStore.getState().setView("settings"); }}><Icon name="users" size={15} /> Book settings & sharing</button>
+          {onOpenShare && <button className="menu-item" onClick={() => { setOpen(false); onOpenShare(); }}><Icon name="users" size={15} /> Share & collaborators</button>}
+          <button className="menu-item" onClick={() => { setOpen(false); useBookStore.getState().setView("settings"); }}><Icon name="gear" size={15} /> Book settings</button>
           <button className="menu-item" onClick={() => { setOpen(false); setShowApiSettings(true); }}><Icon name="sparkle" size={15} /> AI assistant</button>
           <button className="menu-item" onClick={() => { setOpen(false); navigatePublic("/docs"); }}><Icon name="book" size={15} /> Documentation</button>
           <button className="menu-item" onClick={() => { setOpen(false); setPassword(true); }}><Icon name="gear" size={15} /> Set password</button>
@@ -570,6 +636,7 @@ export function Studio() {
   const session = useEditorBus(s => s.session);
   const [palette, setPalette] = useState(false);
   const [newChapter, setNewChapter] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const narrow = () => window.innerWidth <= 1080;
   const [navOpen, setNavOpenState] = useState(() => (narrow() ? false : prefs().navOpen ?? true));
   const setNavOpen = (open: boolean) => { setNavOpenState(open); if (!narrow()) writePrefs({ navOpen: open }); };
@@ -613,6 +680,16 @@ export function Studio() {
     const openTab = forceNewTab || e.metaKey || e.ctrlKey;
     const catalog = useProjectStore.getState().projectCatalog;
     const slug = projectId ? bookSlug(catalog, projectId) : "";
+
+    const commentMark = target.closest("[data-thread]") as HTMLElement | null;
+    if (commentMark && !forceNewTab && !window.getSelection()?.toString()) {
+      const threadId = commentMark.dataset.thread;
+      if (threadId && threadId !== "__draft__") {
+        useBookStore.getState().setPanel("comments", true);
+        useBookStore.getState().setActiveThread(threadId);
+      }
+      return;
+    }
 
     const entity = target.closest("[data-entity]") as HTMLElement | null;
     if (entity && model && !window.getSelection()?.toString()) {
@@ -711,8 +788,9 @@ export function Studio() {
           <button className="search-trigger" onClick={() => setPalette(true)}><Icon name="search" size={14} /> <span>Jump to…</span> <kbd>⌘K</kbd></button>
           <span className={`live-dot ${live === "SUBSCRIBED" ? "on" : ""}`} title={live === "SUBSCRIBED" ? "Live: changes from collaborators appear as they save" : "Reconnecting…"} />
           <Presence />
-          <button className={`btn btn-sm share-btn ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")}><Icon name="users" size={14} /> {role === "owner" ? "Share" : "Book"}</button>
-          <UserMenu theme={theme} setTheme={setTheme} />
+          <button className={`btn btn-sm share-btn ${sharing ? "on" : ""}`} onClick={() => setSharing(true)} title="Share & manage collaborators"><Icon name="users" size={14} /> <span>Share</span></button>
+          <button className={`btn btn-sm settings-btn ${view === "settings" ? "on" : ""}`} onClick={() => setView("settings")} title="Book settings, configuration, export & history"><Icon name="gear" size={14} /> <span className="hide-sm">Settings</span></button>
+          <UserMenu theme={theme} setTheme={setTheme} onOpenShare={() => setSharing(true)} />
         </div>
       </header>
       <div className="studio-body" onClick={e => handleBodyLink(e, false)} onAuxClick={e => { if (e.button === 1) handleBodyLink(e, true); }}>
@@ -740,6 +818,7 @@ export function Studio() {
       {focusMode && <button className="focus-exit" onClick={() => setFocusMode(false)}>Exit focus · Esc</button>}
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       {newChapter && <NewChapterDialog onClose={() => setNewChapter(false)} />}
+      {sharing && <ShareDialog onClose={() => setSharing(false)} />}
       <HoverCard />
       <ListenBar />
     </div>

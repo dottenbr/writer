@@ -1,9 +1,9 @@
 import postgres from 'postgres';
 import {readFile, readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-const host = process.env.SUPABASE_DB_HOST;
-if (!host || !process.env.SUPABASE_DB_PASSWORD) throw new Error('Set SUPABASE_DB_HOST and SUPABASE_DB_PASSWORD');
-const sql = postgres({host, user: process.env.SUPABASE_DB_USER || 'postgres', password: process.env.SUPABASE_DB_PASSWORD, database:'postgres', ssl:'require', max:1, connect_timeout:10});
+const host = process.env.SUPABASE_DB_HOST || 'aws-0-eu-west-1.pooler.supabase.com';
+if (!process.env.SUPABASE_DB_PASSWORD) throw new Error('Set SUPABASE_DB_PASSWORD');
+const sql = postgres({host, port: 5432, user: process.env.SUPABASE_DB_USER || 'postgres.eujclkjaaqeoxcodwwxq', password: process.env.SUPABASE_DB_PASSWORD, database:'postgres', ssl:'require', max:1, connect_timeout:10});
 try {
   await sql`select pg_advisory_lock(78210611)`;
   {

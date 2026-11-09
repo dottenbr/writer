@@ -88,7 +88,7 @@ export function Toolbar() {
         <Btn icon="divider" label="Scene break" disabled={!can} onClick={() => chain().setHorizontalRule().run()} />
       </div>
       <span className="tb-sep" />
-      <button className="tb-text-btn" disabled={!editor} onMouseDown={e => e.preventDefault()} onClick={() => { requestComment(selection); setPanel("comments"); }} title="Comment on the selection">
+      <button className="tb-text-btn" onMouseDown={e => e.preventDefault()} onClick={() => { const sel = selection || window.getSelection()?.toString().trim() || ""; requestComment(sel); setPanel("comments"); }} title="Comment on the selection">
         <Icon name="comment" size={16} /> Comment
       </button>
       <Dictation />

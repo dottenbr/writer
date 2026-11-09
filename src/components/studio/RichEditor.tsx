@@ -2,12 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MARK_CLASS, pandocMarks } from "../../lib/pandoc-marks";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { createRoot } from "react-dom/client";
-import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig } from "../../lib/editor-extensions";
+import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig, type RenderTable } from "../../lib/editor-extensions";
+import { TableEditor } from "./TableEditor";
 import { SceneCardInline } from "./SceneCardInline";
 import { docToMarkdown, escapeHtml, markdownToHtml, nodeToMarkdown, type JSONNode } from "../../lib/markdown-doc";
 import { useBookStore } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
 import { parseScenes } from "../../lib/scene-cards";
+import { markupChipsKey, type ChipConfig } from "../../lib/markup-chips";
+import { resolveAnchor } from "../../lib/anchors";
+import { useChipPopover } from "./ChipPopover";
+import { citeLabel, staticChipContext } from "./useSources";
+import { staticChips } from "../../lib/static-chips";
 
 export interface RichEditorHandle {
   editor: Editor | null;
@@ -43,6 +49,14 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
   editableRef.current = editable;
 
   const editor = useEditor({
+    onBeforeCreate: ({ editor }) => {
+      editor.storage.rawBlock.renderTable = ((el, source, editable, api) => {
+        const root = createRoot(el);
+        const draw = (src: string, can: boolean) => root.render(<TableEditor source={src} editable={can} onChange={api.change} onAddSection={api.addSection} />);
+        draw(source, editable);
+        return { update: draw, destroy: () => setTimeout(() => root.unmount(), 0) };
+      }) as RenderTable;
+    },
     extensions: bookExtensions(placeholder ?? "Start writing…"),
     editable,
     editorProps: { attributes: () => ({ class: "doc-prose", spellcheck: editableRef.current ? "true" : "false" }) },
@@ -117,6 +131,24 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
     editor.view.dispatch(editor.state.tr.setMeta(bookLinksKey, true));
   }, [editor, links]);
 
+  // Anchors, footnotes and citations as chips; they follow the book (chapters, sources) as it changes.
+  const model = useBookStore(s => s.model);
+  const files = useBookStore(s => s.files);
+  useEffect(() => {
+    if (!editor) return;
+    const byPath = new Map(files.map(f => [f.path, f]));
+    const config: ChipConfig = {
+      anchors: !!links.chapterAnchors,
+      editable,
+      resolve: a => resolveAnchor(a, model?.chapters ?? [], p => { const f = byPath.get(p); return f && f.loaded !== false ? f.content : undefined; }),
+      cite: citeLabel,
+      onChip: e => useChipPopover.getState().show({ mode: e.kind, view: e.view, at: e.at, index: e.index, id: e.id, rect: e.rect, editable: editor.isEditable }),
+    };
+    editor.storage.markupChips.config = config;
+    const t = setTimeout(() => { if (!editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(markupChipsKey, { refresh: true })); }, 0);
+    return () => clearTimeout(t);
+  }, [editor, links.chapterAnchors, editable, model, files]);
+
   useEffect(() => {
     if (!editor) return;
     onReady?.(editor);
@@ -145,7 +177,7 @@ function linkEntities(html: string, matcher?: { regex: RegExp | null; byAlias: M
   const nodes: Text[] = [];
   while (walker.nextNode()) {
     const n = walker.currentNode as Text;
-    if (!n.parentElement?.closest("pre,code,a")) nodes.push(n);
+    if (!n.parentElement?.closest("pre,code,a,.anchor-chip,.cite-chip,.fn-ref")) nodes.push(n);
   }
   for (const node of nodes) {
     const text = node.data;
@@ -154,7 +186,7 @@ function linkEntities(html: string, matcher?: { regex: RegExp | null; byAlias: M
     const prev = node.previousSibling;
     const lineStart = node.parentElement?.tagName === "P" && (!prev || (prev as Element).tagName === "BR");
     const spans: Array<{ from: number; to: number; className: string; entity?: string }> = pandocMarks(text)
-      .filter(m => m.kind === "cite" || (lineStart && m.from === 0))
+      .filter(m => m.kind === "line" && lineStart && m.from === 0)
       .map(m => ({ from: m.from, to: m.to, className: MARK_CLASS[m.kind] }));
     if (matcher?.regex && !inHeading) {
       matcher.regex.lastIndex = 0;
@@ -185,7 +217,11 @@ function linkEntities(html: string, matcher?: { regex: RegExp | null; byAlias: M
 
 /** Static rendering identical to the editor's, for chapters not being edited. */
 export function StaticProse({ body, className, onActivate, matcher, scenesPath }: { body: string; className?: string; onActivate?: (point: { x: number; y: number }) => void; matcher?: Parameters<typeof linkEntities>[1]; scenesPath?: string }) {
-  const html = useMemo(() => linkEntities(markdownToHtml(body).html.replace(/<div data-raw-md="([^"]*)"><\/div>/g, (_, src) => `<pre class="raw-md">${src}</pre>`), matcher), [body, matcher]);
+  const model = useBookStore(s => s.model);
+  const files = useBookStore(s => s.files);
+  const html = useMemo(() => linkEntities(staticChips(markdownToHtml(body).html.replace(/<div data-raw-md="([^"]*)"><\/div>/g, (_, src) => `<pre class="raw-md">${src}</pre>`), staticChipContext()), matcher),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [body, matcher, model, files]);
   const scenesFile = useBookStore(s => (scenesPath ? s.files.find(f => f.path === scenesPath)?.content : undefined));
   const count = useMemo(() => (scenesFile ? parseScenes(scenesFile).length : 0), [scenesFile]);
   const activate = (e: React.MouseEvent) => {

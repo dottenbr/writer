@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDocSession } from "./useDocSession";
 import { Icon, useAccess } from "./common";
 import { addScene, deleteScene, moveScene, parseScenes, SCENE_FIELDS, updateScene, type SceneCard, type SceneField } from "../../lib/scene-cards";
@@ -126,8 +126,8 @@ export function SceneCards({ path, chapter, anchor }: { path: string; chapter?: 
   useEffect(() => setFocus(anchor), [anchor]);
   if (session.state === "loading" && !session.text) return <div className="doc-loading"><span className="spinner" /> Opening…</div>;
   const editable = canEdit && session.state !== "loading";
-  const add = () => {
-    const next = addScene(textRef.current, "New scene");
+  const add = (before?: number) => {
+    const next = addScene(textRef.current, "New scene", before);
     session.setText(next.text);
     setFocus(next.slug);
   };
@@ -136,7 +136,13 @@ export function SceneCards({ path, chapter, anchor }: { path: string; chapter?: 
       {session.error && <div className="save-problem" role="alert"><span>Not saved: {session.error}</span><button className="btn btn-sm" onClick={() => void session.saveNow()}>Retry</button></div>}
       <div className="scene-list">
         {cards.map((card, i) => (
-          <SceneCardView key={i} card={card} index={i} count={cards.length} editable={editable} focused={focus === card.slug}
+          <Fragment key={i}>
+          {editable && i > 0 && (
+            <div className="scene-insert">
+              <button className="scene-insert-btn" onClick={() => add(i)} aria-label={`Add a scene between scene ${i} and scene ${i + 1}`}><Icon name="plus" size={12} /> Add a scene here</button>
+            </div>
+          )}
+          <SceneCardView card={card} index={i} count={cards.length} editable={editable} focused={focus === card.slug}
             onChange={next => {
               const current = parseScenes(textRef.current).find(c => c.slug === card.slug) ?? card;
               const out = updateScene(textRef.current, current, next);
@@ -145,9 +151,10 @@ export function SceneCards({ path, chapter, anchor }: { path: string; chapter?: 
             onMove={by => session.setText(moveScene(textRef.current, card.slug, by))}
             onDelete={() => session.setText(deleteScene(textRef.current, card.slug))}
           />
+          </Fragment>
         ))}
         {!cards.length && <div className="empty-board"><p>No scene cards yet.</p></div>}
-        {editable && <button className="scene-new" onClick={add}><Icon name="plus" size={16} /> Add a scene</button>}
+        {editable && <button className="scene-new" onClick={() => add()}><Icon name="plus" size={16} /> Add a scene</button>}
       </div>
       <div className="scene-save muted">{session.state === "saving" ? "Saving…" : session.state === "dirty" ? "Unsaved changes" : session.state === "saved" ? "All changes saved" : ""}</div>
     </>

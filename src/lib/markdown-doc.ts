@@ -8,6 +8,10 @@
 import { marked, type Token, type Tokens } from "marked";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
+// Footnote definitions (`[^1]: The note.`) are paragraphs, not link definitions:
+// otherwise a one-word note turns every `[^1]` into a link to that word.
+marked.use({ tokenizer: { def(src: string) { return /^ {0,3}\[\^/.test(src) ? undefined : false; } } as never });
+
 export interface JSONNode {
   type: string;
   attrs?: Record<string, any>;
@@ -190,7 +194,7 @@ export interface ParsedBody {
 }
 
 export function markdownToHtml(body: string): ParsedBody {
-  const tokens = marked.lexer(body, { gfm: true });
+  const tokens = marked.lexer(body);
   const blocks: string[] = [];
   const html: string[] = [];
   let prefix = "";

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { staticChips } from "../../lib/static-chips";
+import { staticChipContext } from "./useSources";
 import { diffWordsWithSpace } from "diff";
 import { useBookStore } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
@@ -10,7 +12,8 @@ import { completeText, effectiveProvider } from "../../lib/llm-service";
 import { useProjectStore } from "../../store/useProjectStore";
 
 function Markdown({ text, className }: { text: string; className?: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
+  const model = useBookStore(s => s.model);
+  const html = useMemo(() => staticChips(renderMarkdown(text), staticChipContext()), [text, model]);
   return <div className={`md ${className ?? ""}`} dangerouslySetInnerHTML={{ __html: html.replace(/<div data-raw-md="([^"]*)"><\/div>/g, '<pre class="raw-md">$1</pre>') }} />;
 }
 

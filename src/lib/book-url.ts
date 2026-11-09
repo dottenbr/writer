@@ -64,6 +64,7 @@ export function routeToUrl(book: string, route: Route, model: BookModel): string
   const { view, path, anchor } = route;
   if (view === "inspiration" || view === "settings") return `${base}/${view}`;
   if (path === "@brief") return `${base}/brief`;
+  if (path === "@sources") return `${base}/sources${hash(anchor)}`;
   if (!path) return view === "write" ? base : `${base}/${view}`;
   const chapter = chapterForPath(model.chapters, path);
   if (chapter) return `${base}/chapter/${chapter.number}${hash(anchor)}`;
@@ -92,6 +93,7 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   if (head === "plan" && !rest.length) return { view: "plan", path: "" };
   if (head === "bible" && !rest.length) return { view: "bible", path: "" };
   if (head === "brief") return { view: "plan", path: "@brief" };
+  if (head === "sources") return { view: "write", path: "@sources", anchor };
   if (head === "chapter") {
     const chapter = model.chapters.find(c => c.number === Number(rest[0]));
     if (chapter && (rest[1] === "plan" || rest[1] === "scenes")) return { view: "plan", path: chapter.scenesPath ?? `outline/scenes/${String(chapter.number).padStart(2, "0")}-${slugify(chapter.title || "chapter")}.md`, anchor };
@@ -152,6 +154,8 @@ export function studioDocumentTitle(
     sub = "Settings";
   } else if (path === "@brief") {
     sub = "Brief";
+  } else if (path === "@sources") {
+    sub = "Sources";
   } else if (view === "plan" && !path) {
     sub = "Plan";
   } else if (view === "bible" && !path) {

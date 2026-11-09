@@ -90,6 +90,10 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
     download: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,
     check: <path d="m5 12 5 5 9-10" />,
     link: <path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />,
+    footnote: <><path d="M4 19 9 6l5 13M6 14.5h6" /><path d="M17 4.5h2v5.5M17 10h4" /></>,
+    cite: <path d="M8 4H5v16h3M16 4h3v16h-3" />,
+    bookmark: <path d="M7 3h10v18l-5-4-5 4V3Z" />,
+    sources: <><path d="M5 4h4v16H5zM10 4h4v16h-4z" /><path d="m15.5 5 3.7-.9 3 15.5-3.7.9z" /></>,
     code: <path d="m8 7-5 5 5 5M16 7l5 5-5 5" />,
     image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></>,
   };

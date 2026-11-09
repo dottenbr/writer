@@ -73,7 +73,7 @@ let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
 let nonce = 0;
 let lastWritePath = "";
 /** Only manuscript places (title page, chapters, front and back matter) are remembered for the Manuscript button. */
-const isManuscriptPlace = (path: string) => path === "" || !/^(craft|research|bible|outline|publication)\//.test(path) && !/^[^/]+\.(md|ya?ml)$/i.test(path);
+const isManuscriptPlace = (path: string) => path === "" || !path.startsWith("@") && !/^(craft|research|bible|outline|publication)\//.test(path) && !/^[^/]+\.(md|ya?ml)$/i.test(path);
 
 /** Books opened in this tab, so switching back is instant. */
 const memoryCache = new Map<string, BookDocumentRow[]>();

@@ -48,6 +48,7 @@ const SCOPE_GROUPS: Record<NavScope, Group[]> = {
 export function navScopeFor(view: string, path: string, group?: Group): NavScope | null {
   if (view === "plan" || view === "bible") return view;
   if (view !== "write") return null;
+  if (path === "@sources") return "research";
   if (group === "craft" || path.startsWith("craft/")) return "craft";
   if (group === "research" || path.startsWith("research/")) return "research";
   if (group === "publication" || group === "source") return "book";
@@ -187,6 +188,9 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
             );
           })}
         </Section>}
+        {scope === "research" && <div className="nav-top-items">
+          <button className={`nav-item ${location.path === "@sources" ? "active" : ""}`} onClick={() => go("@sources", { view: "write" })}><Icon name="sources" size={14} /><span className="nav-item-text">Sources</span></button>
+        </div>}
         {scope === "bible" && <div className="nav-top-items">
           <button className={`nav-item ${view === "bible" && location.path === "" ? "active" : ""}`} onClick={() => go("", { view: "bible" })}><Icon name="person" size={14} /><span className="nav-item-text">Overview</span><span className="nav-meta">{model.entities.length}</span></button>
         </div>}

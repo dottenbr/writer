@@ -54,4 +54,15 @@ describe("scene cards", () => {
     const deleted = deleteScene(moved, "scene-1-thirty-six");
     expect(parseScenes(deleted).map(c => [c.number, c.title])).toEqual([[1, "The card"], [2, "The offering"]]);
   });
+
+  it("inserts a scene between two others and renumbers the rest", () => {
+    const added = addScene(FILE, "Between", 1);
+    expect(added.slug).toBe("scene-2-between");
+    expect(parseScenes(added.text).map(c => [c.number, c.title])).toEqual([[1, "Thirty-six"], [2, "Between"], [3, "The offering"]]);
+    expect(added.text).toContain("- **Ends on:** “By noon she had decided.”\n\n## Scene 2 – Between\n\n- **Where and when:**");
+    expect(added.text).toContain("- **Ends on:**\n\n## Scene 3 – The offering\n");
+    expect(added.text).toContain("A note under the card.");
+    expect(addScene(FILE, "First", 0).text).toMatch(/# 2\. You Came Back\n\n## Scene 1 – First\n[\s\S]*## Scene 2 – Thirty-six\n/);
+    expect(addScene(FILE, "Last", 9).slug).toBe("scene-3-last");
+  });
 });

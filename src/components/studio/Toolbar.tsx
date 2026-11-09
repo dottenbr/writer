@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useState } from "react";
+import { useChipPopover } from "./ChipPopover";
 import { useEditorBus } from "./editorBus";
 import { Dictation } from "./Dictation";
 import { useListenStore } from "../../store/useListenStore";
@@ -51,6 +52,28 @@ export function Toolbar() {
   const chain = () => editor!.chain().focus();
   const block = !editor ? "p" : editor.isActive("heading", { level: 2 }) ? "h2" : editor.isActive("heading", { level: 3 }) ? "h3" : editor.isActive("heading", { level: 4 }) ? "h4" : "p";
 
+  const isCompanion = !!session && !!model?.companions.some(d => d.path === session.path);
+  const openAt = (mode: "new-cite" | "new-anchor" | "new-footnote", id?: string) => {
+    if (!editor) return;
+    const view = editor.view;
+    const at = view.state.selection.to;
+    const c = view.coordsAtPos(at);
+    useChipPopover.getState().show({ mode, view, at, index: 0, id, rect: new DOMRect(c.left, c.top, 1, c.bottom - c.top), editable: true });
+  };
+  const insertFootnote = () => {
+    if (!editor) return;
+    const text = editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n", "\n");
+    const used = [...text.matchAll(/\[\^(\d+)\]/g)].map(m => Number(m[1]));
+    const id = String((used.length ? Math.max(...used) : 0) + 1);
+    const { state } = editor.view;
+    const at = state.selection.to;
+    let tr = state.tr.insertText(`[^${id}]`, at);
+    const end = tr.doc.content.size;
+    tr = tr.insert(end, state.schema.nodes.paragraph.create(null, state.schema.text(`[^${id}]: `)));
+    editor.view.dispatch(tr);
+    requestAnimationFrame(() => openAt("new-footnote", id));
+  };
+
   const state = session?.state;
   const readOnly = !!session && !!editor && !editor.isEditable;
   const saveLabel = !session ? "" : readOnly ? "Read only" : state === "saving" ? "Saving…" : state === "dirty" ? "Unsaved" : state === "error" ? "Not saved" : state === "loading" ? "Opening…" : suggesting ? "Saved" : "All changes saved";
@@ -90,6 +113,12 @@ export function Toolbar() {
         <Btn icon="numbers" label="Numbered list" disabled={!can} active={isOn("orderedList")} onClick={() => chain().toggleOrderedList().run()} />
         <Btn icon="quote" label="Block quote" disabled={!can} active={isOn("blockquote")} onClick={() => chain().toggleBlockquote().run()} />
         <Btn icon="divider" label="Scene break" disabled={!can} onClick={() => chain().setHorizontalRule().run()} />
+      </div>
+      <span className="tb-sep" />
+      <div className="tb-group">
+        <Btn icon="footnote" label="Footnote" disabled={!can} onClick={insertFootnote} />
+        <Btn icon="cite" label="Cite a source" disabled={!can} onClick={() => openAt("new-cite")} />
+        {isCompanion && <Btn icon="bookmark" label="Chapter reference for this line" disabled={!can} onClick={() => openAt("new-anchor")} />}
       </div>
       <span className="tb-sep" />
       <button className="tb-text-btn" onMouseDown={e => e.preventDefault()} onClick={() => { const sel = selection || window.getSelection()?.toString().trim() || ""; requestComment(sel); setPanel("comments"); }} title="Comment on the selection">

@@ -500,7 +500,37 @@ export const DOC_PAGES: DocPage[] = [
 ## Jakob Kessler
 *Also called: Kessler, the young smith (Ch. 11).*
 
-Nineteen years old in the eighty-second summer. Apprenticed at the lower forge in Ennet (*Ch. 3*, *Ch. 11*). He helps Nora carry the iron pot up the gully before the first October snow (*Ch. 13*).`,
+- **On the page:**
+  - Nineteen years old in the eighty-second summer. (*Ch. 3*)
+  - Apprenticed at the lower forge in Ennet. (*Ch. 3*; *Ch. 11*)
+  - Helps Nora carry the iron pot up the gully before the first October snow. (*Ch. 13, Scene 2*: “the pot swung between them”)`,
+      },
+      {
+        type: "h2",
+        id: "anchors",
+        text: "Chapter References Beside Each Fact",
+      },
+      {
+        type: "p",
+        text: "Every fact in the bible, plan, craft and research pages says where the book establishes it. One fact goes on one line, and its references come at the end in one parenthesis: `(*Ch. 13, Scene 2*: “quoted words”; *Ch. 14*)`. The Studio shows them as **chips beside the fact**, never inside the sentence. Each chip names the chapter and scene; hover for the chapter title, scene title and the quoted words, click to open the chapter at those words. A chip turns amber when the quoted words are no longer in the chapter, and red when the chapter or scene does not exist. Put the cursor in a line to edit its raw text, or click a chip and choose **Edit** to pick the chapter, scene and words. The bookmark button in the toolbar adds a reference to the line you are in.",
+      },
+      {
+        type: "h2",
+        id: "tables",
+        text: "Canon, Style Sheet and Ledgers as Records",
+      },
+      {
+        type: "p",
+        text: "Tables in companion pages are edited as records, not as Markdown. **Canon** shows each fact with its references and a label (documented, testimony, inferred, invented); add a fact or a new section at the foot of any table. The **style sheet** reads as decision and value, and **Add decision** suggests what a copyeditor expects (spelling, dashes, numbers…). Wide tables such as the **claim ledger** show one card per claim with its status. Rows move up and down and can be deleted; the file stays the standard Markdown table, with untouched rows kept byte for byte.",
+      },
+      {
+        type: "h2",
+        id: "footnotes-and-sources",
+        text: "Footnotes and Sources",
+      },
+      {
+        type: "p",
+        text: "The toolbar's footnote button inserts a numbered footnote and opens its note; click any footnote number to edit or delete it. Notes are kept as Markdown footnotes (`[^1]` and `[^1]: …`) and listed at the end of the page. **Research › Sources** is the book's bibliography (`research/bibliography.yaml`, CSL-YAML): search, add, edit and delete sources and see how often each is cited. **Cite a source** in the toolbar inserts a citation such as `[@luther1912, Matt 6:7]`, shown as a short cite (“Luther 1912, Matt 6:7”); click it to change the page or add a source. The build turns citations into notes in the book's citation style.",
       },
       {
         type: "list",

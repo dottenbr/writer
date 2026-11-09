@@ -5,7 +5,7 @@
  */
 export type MarkKind = "line" | "cite";
 
-const CITATION = /\[(?:[^\][@]*[\s;])?-?@\w[\w:.#$%&+?<>~/-]*[^\][]*\]/g;
+export const CITATION = /\[(?:[^\][@]*[\s;])?-?@\w[\w:.#$%&+?<>~/-]*[^\][]*\]/g;
 
 /** Where the marks are in `text`; lines are separated by "\n". */
 export function pandocMarks(text: string): Array<{ from: number; to: number; kind: MarkKind }> {

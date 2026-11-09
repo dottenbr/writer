@@ -93,13 +93,19 @@ export function renumberScenes(text: string): string {
   return text.replace(/^## Scene\s+\d+(\s*[–—:-])/gm, (_m, sep) => `## Scene ${++n}${sep}`);
 }
 
-export function addScene(text: string, title: string): { text: string; slug: string } {
+/**
+ * Add a scene at the end, or before the scene at `before` (0-based) to put it
+ * between two others. Scene numbers are kept in file order.
+ */
+export function addScene(text: string, title: string, before?: number): { text: string; slug: string } {
   const cards = parseScenes(text);
-  const n = cards.length + 1;
+  const at = before == null || before >= cards.length ? cards.length : Math.max(0, before);
   const sep = cards[0]?.heading.match(HEADING)?.[2] ?? "–";
-  const heading = `Scene ${n} ${sep} ${title.trim() || "New scene"}`;
+  const heading = `Scene ${at + 1} ${sep} ${title.trim() || "New scene"}`;
   const body = serializeSceneBody(["Where and when", "Who", "Purpose", "What happens", "Turn", "Ends on"].map(label => ({ label, value: "", items: [] })), "");
-  return { text: text.replace(/\s*$/, "") + `\n\n## ${heading}\n\n${body}\n`, slug: slugify(heading) };
+  if (at === cards.length) return { text: text.replace(/\s*$/, "") + `\n\n## ${heading}\n\n${body}\n`, slug: slugify(heading) };
+  const next = findSection(text, cards[at].slug)!;
+  return { text: renumberScenes(text.slice(0, next.start) + `## ${heading}\n\n${body}\n\n` + text.slice(next.start)), slug: slugify(heading) };
 }
 
 export function deleteScene(text: string, slug: string): string {

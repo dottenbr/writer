@@ -1,4 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChipPopover } from "./ChipPopover";
+import { useSources } from "./useSources";
+import { parseAnchor } from "../../lib/anchors";
 import { useProjectStore } from "../../store/useProjectStore";
 import { useAuthStore } from "../../store/useAuthStore";
 import { prefs, useBookStore, writePrefs, type View } from "../../store/useBookStore";
@@ -34,7 +37,7 @@ function lazyView<T>(load: () => Promise<T>) {
   }) as Promise<any>);
 }
 /** Every view's code, fetched once the book is open so switching sections never waits. */
-const VIEW_CHUNKS = [() => import("./ManuscriptView"), () => import("./CompanionView"), () => import("./ContextPanel"), () => import("./Boards"), () => import("./BiblePages"), () => import("./ChapterPlanPage"), () => import("./TimelinePage"), () => import("./BookSettings"), () => import("../Inspiration"), () => import("./BriefPage")];
+const VIEW_CHUNKS = [() => import("./ManuscriptView"), () => import("./CompanionView"), () => import("./ContextPanel"), () => import("./Boards"), () => import("./BiblePages"), () => import("./ChapterPlanPage"), () => import("./TimelinePage"), () => import("./BookSettings"), () => import("../Inspiration"), () => import("./BriefPage"), () => import("./SourcesPage")];
 let viewsPreloaded = false;
 function preloadViews() {
   if (viewsPreloaded) return;
@@ -53,6 +56,7 @@ const ChapterPlanPage = lazyView(() => import("./ChapterPlanPage").then(m => ({ 
 const TimelinePage = lazyView(() => import("./TimelinePage").then(m => ({ default: m.TimelinePage })));
 const BookSettings = lazyView(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
 const Inspiration = lazyView(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
+const SourcesPage = lazyView(() => import("./SourcesPage").then(m => ({ default: m.SourcesPage })));
 const BriefPage = lazyView(() => import("./BriefPage").then(m => ({ default: m.BriefPage })));
 
 export function useTheme() {
@@ -372,10 +376,13 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
       ...(() => { const pages = [...docs("story"), ...docs("bible")].filter(d => !entityFiles.includes(d.path)); return pages.length ? [{ heading: "Pages" } as const, ...pages.map(d => pageEntry(d))] : []; })(),
     ] },
     ...(docs("craft").length ? [{ id: "craft", label: "Craft", icon: "feather", run: () => go(docs("craft")[0].path), items: docs("craft").map(d => pageEntry(d)) }] : []),
-    ...(research.length ? [{ id: "research", label: "Research", icon: "search", run: () => go(research[0].path), items: researchFolders.flatMap(folder => {
-      const inFolder = research.filter(d => d.path.split("/").slice(1, -1).join("/") === folder);
-      return [...(folder ? [{ heading: folder.replace(/[-_]/g, " ").replace(/\//g, " › ") } as const] : []), ...inFolder.map(d => pageEntry(d))];
-    }) }] : []),
+    { id: "research", label: "Research", icon: "search", run: () => go(research[0]?.path ?? "@sources", { view: "write" }), items: [
+      { label: "Sources", run: () => go("@sources", { view: "write" }), active: location.path === "@sources" },
+      ...researchFolders.flatMap(folder => {
+        const inFolder = research.filter(d => d.path.split("/").slice(1, -1).join("/") === folder);
+        return [...(folder ? [{ heading: folder.replace(/[-_]/g, " ").replace(/\//g, " › ") } as const] : research.length ? [{ heading: "Pages" } as const] : []), ...inFolder.map(d => pageEntry(d))];
+      }),
+    ] },
   ];
 
   return (
@@ -635,6 +642,7 @@ export function Studio() {
   const model = useBookStore(s => s.model);
   const view = useBookStore(s => s.view);
   const setView = useBookStore(s => s.setView);
+  useSources(); // the bibliography loads with the book, so citations show as short cites
   const location = useBookStore(s => s.location);
   const go = useBookStore(s => s.go);
   const live = useBookStore(s => s.live);
@@ -734,6 +742,18 @@ export function Studio() {
       return;
     }
 
+    const chip = target.closest(".anchor-chip[data-anchor]") as HTMLElement | null;
+    if (chip && model) {
+      const a = parseAnchor(chip.dataset.anchor!);
+      const n = a.refs[0]?.chapters[0];
+      const chapter = model.chapters.find(c => c.number === n);
+      if (!chapter) return;
+      const path = chapter.authorPath ?? chapter.currentPath;
+      if (openTab && slug) { e.preventDefault(); openInNewTab(routeToUrl(slug, { view: "write", path }, model)); return; }
+      go(path, { find: a.quote });
+      return;
+    }
+
     const anchor = target.closest("[data-chapters]") as HTMLElement | null;
     if (anchor && model && (forceNewTab || e.metaKey || e.ctrlKey || !target.closest("[contenteditable=true]"))) {
       const n = anchorNumbers(anchor.dataset.chapters!)[0];
@@ -766,8 +786,8 @@ export function Studio() {
   let content: React.ReactNode = null;
   let isDoc = false;
   if (view === "write") {
-    content = path === "@brief" ? <BriefPage /> : isChapter ? <ManuscriptView /> : <CompanionView />;
-    isDoc = path !== "@brief";
+    content = path === "@brief" ? <BriefPage /> : path === "@sources" ? <SourcesPage focus={location.anchor} /> : isChapter ? <ManuscriptView /> : <CompanionView />;
+    isDoc = path !== "@brief" && path !== "@sources";
   } else if (view === "plan") {
     const scenes = path.startsWith("outline/scenes/");
     content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : scenes ? <ChapterPlanPage path={path} anchor={location.anchor} /> : <CompanionView />;
@@ -830,6 +850,7 @@ export function Studio() {
       {newChapter && <NewChapterDialog onClose={() => setNewChapter(false)} />}
       {sharing && <ShareDialog onClose={() => setSharing(false)} />}
       <HoverCard />
+      <ChipPopover />
       <ListenBar />
     </div>
   );

@@ -11,7 +11,8 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { marked } from "marked";
 import { CHAPTER_ANCHOR, type Entity } from "./book-model";
 import { escapeHtml, isSafeHref } from "./markdown-doc";
-import { MARK_CLASS, pandocMarks } from "./pandoc-marks";
+import { MarkupChips } from "./markup-chips";
+import { isTableSource } from "./md-table";
 
 /** Scene breaks and rules keep the exact markup they were written with. */
 const SceneBreak = HorizontalRule.extend({
@@ -52,12 +53,50 @@ export const RawBlock = Node.create({
   renderHTML({ HTMLAttributes }) {
     return ["div", mergeAttributes({ "data-raw-md": HTMLAttributes.source, class: "raw-md" })];
   },
+  addStorage() { return { renderTable: null as RenderTable | null }; },
   addNodeView() {
-    return ({ node }) => {
+    const storage = this.storage as { renderTable: RenderTable | null };
+    return ({ node, getPos, editor }) => {
       const dom = document.createElement("div");
       dom.className = "raw-md";
       dom.contentEditable = "false";
       const source = String(node.attrs.source ?? "");
+      if (storage.renderTable && isTableSource(source)) {
+        // Tables are edited as records (TableEditor); the node keeps the Markdown.
+        dom.classList.add("raw-md-records");
+        let current = node;
+        const api: TableApi = {
+          change: next => {
+            const pos = getPos();
+            if (typeof pos !== "number" || next === current.attrs.source) return;
+            editor.view.dispatch(editor.view.state.tr.setNodeMarkup(pos, undefined, { ...current.attrs, source: next }));
+          },
+          addSection: (title, header) => {
+            const pos = getPos();
+            if (typeof pos !== "number") return;
+            const { schema } = editor.view.state;
+            const at = pos + current.nodeSize;
+            const nodes = [schema.nodes.heading.create({ level: 2 }, schema.text(title)), schema.nodes.rawBlock.create({ source: header })];
+            editor.view.dispatch(editor.view.state.tr.insert(at, nodes));
+          },
+        };
+        const view = storage.renderTable(dom, source, editor.isEditable, api);
+        let editable = editor.isEditable;
+        const onTx = () => { if (editor.isEditable !== editable) { editable = editor.isEditable; view.update(String(current.attrs.source), editable); } };
+        editor.on("transaction", onTx);
+        return {
+          dom,
+          update: n => {
+            if (n.type !== current.type || !isTableSource(String(n.attrs.source ?? ""))) return false;
+            current = n;
+            view.update(String(n.attrs.source), editor.isEditable);
+            return true;
+          },
+          stopEvent: () => true,
+          ignoreMutation: () => true,
+          destroy: () => { editor.off("transaction", onTx); view.destroy(); },
+        };
+      }
       if (/^\s*\|/.test(source)) {
         dom.classList.add("raw-md-table");
         dom.innerHTML = String(marked.parse(escapeHtml(source).replace(/&gt;/g, ">").replace(/&quot;/g, '"'), { async: false, gfm: true }));
@@ -74,6 +113,9 @@ export const RawBlock = Node.create({
     };
   },
 });
+
+export interface TableApi { change: (source: string) => void; addSection: (title: string, header: string) => void }
+export type RenderTable = (el: HTMLElement, source: string, editable: boolean, api: TableApi) => { update: (source: string, editable: boolean) => void; destroy: () => void };
 
 export interface LinkConfig {
   entities?: { regex: RegExp | null; byAlias: Map<string, Entity> };
@@ -98,10 +140,6 @@ function decorationsForBlock(node: PMNode, pos: number, config: LinkConfig, deco
   });
   if (!text) return;
   const range = (start: number, end: number) => [offsets[start], offsets[end - 1] + 1] as const;
-  for (const m of pandocMarks(text)) {
-    const [from, to] = range(m.from, m.to);
-    decos.push(Decoration.inline(from, to, { class: MARK_CLASS[m.kind] }));
-  }
   if (config.entities?.regex && node.type.name !== "heading") {
     for (const m of text.matchAll(config.entities.regex)) {
       const e = config.entities.byAlias.get(m[0]);
@@ -112,6 +150,8 @@ function decorationsForBlock(node: PMNode, pos: number, config: LinkConfig, deco
   }
   if (config.chapterAnchors) {
     for (const m of text.matchAll(CHAPTER_ANCHOR)) {
+      // full anchors (*Ch. 3, Scene 4*) are chips; this links loose mentions
+      if (m.index! > 0 && text[m.index! - 1] === "*") continue;
       const [from, to] = range(m.index!, m.index! + m[0].length);
       decos.push(Decoration.inline(from, to, { class: "chapter-ref", "data-chapters": m[1], title: "⌘-click to open the chapter" }));
     }
@@ -221,6 +261,7 @@ export function bookExtensions(placeholder: string) {
     }),
     Placeholder.configure({ placeholder }),
     BookLinks,
+    MarkupChips,
   ];
 }
 

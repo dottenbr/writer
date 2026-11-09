@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useProjectStore } from "../../store/useProjectStore";
 import { useBookStore } from "../../store/useBookStore";
-import { downloadBookkitArchive, saveBookDocument } from "../../lib/supabase-service";
+import { downloadBookkitArchive, placeBook, readBookPlacement, saveBookDocument } from "../../lib/supabase-service";
+import { canWriteIn, useLibraryStore } from "../../store/useLibraryStore";
+import { libraryUrl } from "../../lib/library-host";
+import { bookSlug } from "../../lib/book-url";
 import { exportManuscriptDocx, exportManuscriptText } from "../../lib/export-book";
 import { Collaboration } from "../Collaboration";
 import { SnapshotBrowser } from "../SnapshotBrowser";
@@ -10,6 +13,60 @@ import { Icon, useAccess } from "./common";
 function yamlLine(content: string, key: string, value: string) {
   const line = `${key}: ${JSON.stringify(value)}`;
   return new RegExp(`^${key}:.*$`, "m").test(content) ? content.replace(new RegExp(`^${key}:.*$`, "m"), line) : content + `\n${line}\n`;
+}
+
+/** Which library and shelf the book is on, and whether the library's people can open it. */
+function LibraryCard() {
+  const { isOwner, projectId } = useAccess();
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const [place, setPlace] = useState<{ library_id: string | null; shelf_id: string | null; private: boolean } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { if (projectId) readBookPlacement(projectId).then(setPlace).catch(e => setError(e.message)); }, [projectId]);
+  if (!place || !projectId) return null;
+  const library = libraries.find(l => l.id === place.library_id);
+  const canShelve = isOwner || canWriteIn(library);
+  const update = async (patch: Partial<typeof place>) => {
+    setError("");
+    try {
+      await placeBook(projectId, patch);
+      const next = await readBookPlacement(projectId);
+      setPlace(next);
+      void reloadLibraries();
+      if (patch.library_id !== undefined) {
+        const slug = libraries.find(l => l.id === next.library_id)?.slug ?? null;
+        window.location.href = libraryUrl(slug, "/" + bookSlug(catalog, projectId) + "/settings");
+      }
+    } catch (e) { setError((e as Error).message); }
+  };
+  const people = (library?.members.length ?? 0) + (library ? 1 : 0);
+  return (
+    <section className="settings-card">
+      <h2>Library</h2>
+      <div className="settings-grid">
+        <label className="field">Library
+          <select value={place.library_id ?? ""} disabled={!isOwner} onChange={e => void update({ library_id: e.target.value || null })}>
+            {!place.library_id && <option value="">Not in a library</option>}
+            {libraries.filter(l => l.id === place.library_id || canWriteIn(l)).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </label>
+        <label className="field">Shelf
+          <select value={place.shelf_id ?? ""} disabled={!canShelve || !library} onChange={e => void update({ shelf_id: e.target.value || null })}>
+            <option value="">No shelf</option>
+            {[...(library?.shelves ?? [])].sort((a, b) => a.position - b.position).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+      </div>
+      {library && (
+        <label className="check-row">
+          <input type="checkbox" checked={place.private} disabled={!isOwner} onChange={e => void update({ private: e.target.checked })} />
+          <span><strong>Private</strong> — only you and the people you share it with below. {place.private ? `The ${people} people in ${library.name} don’t see it.` : `Everyone in ${library.name} can open it with their library role.`}</span>
+        </label>
+      )}
+      {error && <div className="inline-error" role="alert">{error}</div>}
+    </section>
+  );
 }
 
 export function BookSettings() {
@@ -60,6 +117,8 @@ export function BookSettings() {
         {isOwner && <button className="btn btn-primary btn-sm" disabled={busy === "details" || (title === model.title && author === model.author) || !title.trim()} onClick={() => void saveDetails()}>Save details</button>}
         <p className="settings-hint">This book follows a human-authored policy: the assistant can give editorial notes and help with plan and bible pages, but never writes your prose.</p>
       </section>
+
+      <LibraryCard />
 
       <section className="settings-card">
         <h2>Sharing</h2>

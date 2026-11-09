@@ -4,6 +4,8 @@ import type { TabId } from "../types";
 import { Studio } from "./studio/Studio";
 import { useHomeStore } from "../store/useHomeStore";
 import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
+import { useLibraryStore } from "../store/useLibraryStore";
+import { hostLibrary, libraryUrl } from "../lib/library-host";
 import { Workspace } from "./Workspace";
 
 const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
@@ -352,9 +354,27 @@ function useHomeHistory() {
   }, [setHome]);
 }
 
+/** A book always opens at its library's address (old links on bookkit.net are sent there). */
+function useLibraryAddress(home: boolean) {
+  const catalogStatus = useProjectStore((s) => s.catalogStatus);
+  const catalog = useProjectStore((s) => s.projectCatalog);
+  const currentId = useProjectStore((s) => s.currentProjectId);
+  const libraries = useLibraryStore((s) => s.libraries);
+  const load = useLibraryStore((s) => s.load);
+  useEffect(() => { if (catalogStatus === "ready" && !libraries) void load(); }, [catalogStatus, libraries, load]);
+  useEffect(() => {
+    if (home || catalogStatus !== "ready" || !libraries || !currentId) return;
+    const book = catalog.find((p) => p.id === currentId);
+    if (!book) return;
+    const want = libraries.find((l) => l.id === book.libraryId)?.slug ?? null;
+    if (want !== hostLibrary()) window.location.replace(libraryUrl(want, window.location.pathname + window.location.hash));
+  }, [home, catalogStatus, libraries, currentId, catalog]);
+}
+
 export function Layout() {
   useHomeHistory();
   const home = useHomeStore((s) => s.home);
+  useLibraryAddress(home);
   const currentProject = useProjectStore((s) => s.currentProject());
   const catalogStatus = useProjectStore((s) => s.catalogStatus);
   const showApiSettings = useProjectStore((s) => s.showApiSettings);

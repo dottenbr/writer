@@ -14,6 +14,8 @@ import { SceneBoard } from "./SceneBoard";
 import { TimelinePage } from "./TimelinePage";
 import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
 import { useHomeStore } from "../../store/useHomeStore";
+import { canWriteIn, useLibraryStore } from "../../store/useLibraryStore";
+import { hostLibrary, libraryUrl } from "../../lib/library-host";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } from "./common";
 import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
@@ -52,6 +54,8 @@ function BookSwitcher() {
   const currentId = useProjectStore(s => s.currentProjectId);
   const switchProject = useProjectStore(s => s.switchProject);
   const title = useBookStore(s => s.model?.title);
+  const here = useLibraryStore(s => s.current());
+  const others = (useLibraryStore(s => s.libraries) ?? []).filter(l => l.id !== here?.id);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -70,10 +74,10 @@ function BookSwitcher() {
       </button>
       {open && (
         <div className="menu book-menu">
-          <button className="menu-item" onClick={() => { setOpen(false); useHomeStore.getState().showHome(); }}><Icon name="grid" size={15} /> <span className="menu-item-text">All books</span></button>
+          <button className="menu-item" onClick={() => { setOpen(false); useHomeStore.getState().showHome(); }}><Icon name="grid" size={15} /> <span className="menu-item-text">{here ? `${here.name} home` : "All books"}</span></button>
           <div className="menu-sep" />
-          <div className="menu-label">Your books</div>
-          {catalog.map(p => (
+          <div className="menu-label">{here ? "Books in this library" : "Your books"}</div>
+          {catalog.filter(p => !here || p.libraryId === here.id).map(p => (
             <button key={p.id} className={`menu-item ${p.id === currentId ? "current" : ""}`} onClick={() => { setOpen(false); if (p.id !== currentId) void switchProject(p.id); }}>
               <Icon name="book" size={15} />
               <span className="menu-item-text">{p.name}</span>
@@ -81,6 +85,11 @@ function BookSwitcher() {
               {p.id === currentId && <Icon name="check" size={14} />}
             </button>
           ))}
+          {others.length > 0 && <>
+            <div className="menu-sep" />
+            <div className="menu-label">Other libraries</div>
+            {others.map(l => <a key={l.id} className="menu-item" href={libraryUrl(l.slug)}><Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span></a>)}
+          </>}
           <div className="menu-sep" />
           <button className="menu-item" onClick={() => { setOpen(false); setCreating(true); }}><Icon name="plus" size={15} /> New book</button>
         </div>
@@ -93,10 +102,17 @@ function BookSwitcher() {
 export function NewBookDialog({ onClose }: { onClose: () => void }) {
   const switchProject = useProjectStore(s => s.switchProject);
   const refreshCatalog = useProjectStore(s => s.loadFromStorage);
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const here = useLibraryStore(s => s.current());
+  const writable = libraries.filter(canWriteIn);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState(() => prefs().authorName ?? "");
+  const [libraryId, setLibraryId] = useState<string>(() => (here && canWriteIn(here) ? here.id : writable[0]?.id ?? ""));
+  const library = libraries.find(l => l.id === libraryId);
+  const [shelfId, setShelfId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const shelves = [...(library?.shelves ?? [])].sort((a, b) => a.position - b.position);
   return (
     <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <form className="dialog" onSubmit={async e => {
@@ -105,9 +121,11 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
         setBusy(true); setError("");
         try {
           writePrefs({ authorName: author.trim() });
-          const id = await createBook(title.trim(), author.trim());
+          const id = await createBook(title.trim(), author.trim(), { libraryId: library?.id ?? null, shelfId: shelfId || null });
           await refreshCatalog();
-          window.history.pushState(null, "", "/" + bookSlug(useProjectStore.getState().projectCatalog, id));
+          const path = "/" + bookSlug(useProjectStore.getState().projectCatalog, id);
+          if ((library?.slug ?? null) !== hostLibrary()) { window.location.href = libraryUrl(library?.slug ?? null, path); return; }
+          window.history.pushState(null, "", path);
           useHomeStore.getState().setHome(false);
           await switchProject(id);
           onClose();
@@ -117,6 +135,12 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
         <p className="dialog-sub">You’ll get a manuscript with a first chapter, a story bible, a plan and a style guide, all linked together.</p>
         <label className="field">Title<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="The working title" /></label>
         <label className="field">Author name<input value={author} onChange={e => setAuthor(e.target.value)} placeholder="As it should appear on the cover" /></label>
+        {writable.length > 1 && (
+          <label className="field">Library<select value={libraryId} onChange={e => { setLibraryId(e.target.value); setShelfId(""); }}>{writable.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
+        )}
+        {shelves.length > 0 && (
+          <label className="field">Shelf<select value={shelfId} onChange={e => setShelfId(e.target.value)}><option value="">No shelf</option>{shelves.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+        )}
         {error && <div className="inline-error" role="alert">{error}</div>}
         <div className="dialog-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -515,6 +539,10 @@ export function Studio() {
   }, [location.nonce]);
   const [theme, setTheme] = useTheme();
   const { role } = useAccess();
+  const library = useLibraryStore(s => s.current());
+  const libraries = useLibraryStore(s => s.libraries);
+  const loadLibraries = useLibraryStore(s => s.load);
+  useEffect(() => { if (!libraries) void loadLibraries(); }, [libraries, loadLibraries]);
   useUrlSync();
 
   useEffect(() => { if (projectId) void load(projectId); }, [projectId, load]);
@@ -613,7 +641,8 @@ export function Studio() {
       <header className="topbar">
         <div className="topbar-left">
           <button className="icon-btn" onClick={() => setNavOpen(!navOpen)} aria-label={navOpen ? "Hide contents" : "Show contents"} title="Contents"><Icon name="sidebar" size={18} /></button>
-          <button className="brand brand-home" onClick={() => useHomeStore.getState().showHome()} title="All your books"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></button>
+          <button className="brand brand-home" onClick={() => useHomeStore.getState().showHome()} title={library ? `${library.name} home` : "All your books"}><span className="brand-mark">b</span><span className="brand-name">bookkit</span></button>
+          {library && <><span className="topbar-slash">/</span><button className="lib-crumb" onClick={() => useHomeStore.getState().showHome()}>{library.name}</button></>}
           <span className="topbar-slash">/</span>
           <BookSwitcher />
         </div>

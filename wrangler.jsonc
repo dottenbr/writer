@@ -18,10 +18,14 @@
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Kb8rkJr2M7kNgU_UATyVSg_wGLi8yQM"
   },
   "routes": [
-    {
-      "pattern": "bookkit.net",
-      "custom_domain": true
-    }
+    { "pattern": "bookkit.net", "custom_domain": true },
+    // Each library has its own address. These three are custom domains (DNS and
+    // certificates are created on deploy); the wildcard route serves every other
+    // library once a proxied `*` DNS record exists for bookkit.net.
+    { "pattern": "dom.bookkit.net", "custom_domain": true },
+    { "pattern": "heidi.bookkit.net", "custom_domain": true },
+    { "pattern": "carly.bookkit.net", "custom_domain": true },
+    { "pattern": "*.bookkit.net/*", "zone_name": "bookkit.net" }
   ],
   "workers_dev": true
 }

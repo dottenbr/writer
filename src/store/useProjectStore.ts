@@ -120,7 +120,7 @@ interface ProjectStore {
 
   // App state
   projects: Project[];
-  projectCatalog: Array<{id:string;name:string;role:ProjectRole}>;
+  projectCatalog: Array<{id:string;name:string;role:ProjectRole;libraryId?:string|null}>;
   catalogStatus: "idle" | "loading" | "ready";
   currentProjectId: string | null;
   currentProjectRole: ProjectRole | null;

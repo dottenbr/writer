@@ -97,12 +97,22 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  const who=await fetch(env.SUPABASE_URL+'/auth/v1/user',{headers,signal});if(!who.ok)return json({error:'Your session expired. Sign in again.'},401);
  const user:any=await who.json();
  const body:any=await limitedBody(request).catch(()=>null);
- const projectId=String(body?.projectId??''),email=String(body?.email??'').trim().toLowerCase();
- if(!/^[a-f0-9-]{36}$/i.test(projectId)||!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'A book and a valid email are required.'},400);
- const owned=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=id&id=eq.${projectId}&owner_id=eq.${user.id}`,{headers,signal});
- if(!owned.ok||!(await owned.json()).length)return json({error:'Only the book’s owner can create invitation links.'},403);
- const invited=await fetch(`${env.SUPABASE_URL}/rest/v1/project_invitations?select=id&project_id=eq.${projectId}&email=eq.${encodeURIComponent(email)}`,{headers,signal});
- if(!invited.ok||!(await invited.json()).length)return json({error:'Invite this email to the book first.'},404);
+ const projectId=String(body?.projectId??''),libraryId=String(body?.libraryId??''),email=String(body?.email??'').trim().toLowerCase();
+ const forLibrary=/^[a-f0-9-]{36}$/i.test(libraryId);
+ if((!forLibrary&&!/^[a-f0-9-]{36}$/i.test(projectId))||!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'A book or library and a valid email are required.'},400);
+ let library:any=null;
+ if(forLibrary){
+  const role=await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/library_role`,{method:'POST',headers,signal,body:JSON.stringify({p_library:libraryId})}).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(role!=='owner')return json({error:'Only the library’s owner can send invitations.'},403);
+  library=(await fetch(`${env.SUPABASE_URL}/rest/v1/libraries?select=id,slug,name,owner_email&id=eq.${libraryId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]))?.[0];
+  const invited=await fetch(`${env.SUPABASE_URL}/rest/v1/library_invitations?select=id&library_id=eq.${libraryId}&email=eq.${encodeURIComponent(email)}`,{headers,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+  if(!library||(!invited.length&&library.owner_email!==email))return json({error:'Add this email to the library first.'},404);
+ }else{
+  const owned=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=id&id=eq.${projectId}&owner_id=eq.${user.id}`,{headers,signal});
+  if(!owned.ok||!(await owned.json()).length)return json({error:'Only the book’s owner can create invitation links.'},403);
+  const invited=await fetch(`${env.SUPABASE_URL}/rest/v1/project_invitations?select=id&project_id=eq.${projectId}&email=eq.${encodeURIComponent(email)}`,{headers,signal});
+  if(!invited.ok||!(await invited.json()).length)return json({error:'Invite this email to the book first.'},404);
+ }
  const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
  const generate=(type:string)=>fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type,email,redirect_to:url.origin+'/'}),signal});
  let res=await generate('invite');
@@ -112,8 +122,10 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  if(!res.ok||typeof link!=='string')return json({error:'Could not create a sign-in link. Try again.'},502);
  if(body?.send!==true)return json({link});
  if(!env.EMAIL)return json({error:'Email sending is not configured on this server. Copy the link instead.',link},503);
- const book=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=name&id=eq.${projectId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]);
- const title=String(book?.[0]?.name??'a book').slice(0,200);
+ const book=forLibrary?[]:await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=name&id=eq.${projectId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]);
+ const title=String(forLibrary?library.name:book?.[0]?.name??'a book').slice(0,200);
+ const home=forLibrary&&/\.bookkit\.net$/.test(url.hostname)?`https://${library.slug}.bookkit.net`:url.origin;
+ const owning=forLibrary&&library.owner_email===email;
  const inviter=String(user?.user_metadata?.display_name||user?.email||'The author').slice(0,120);
  const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
  const invitee=data?.id??data?.user?.id;
@@ -123,9 +135,9 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  const mail=bookkitEmail({
   origin:url.origin,
   preheader:`${inviter} invited you to work on ${title}.`,
-  lines:[`<strong>${esc(inviter)}</strong> invited you to work on <strong>${esc(title)}</strong> in Bookkit.`],
-  button:{label:'Open the book',url:hasCode?signInUrl(url.origin,email,code!):link},
-  codeLead:hasCode?`Or go to ${esc(url.host)}, choose <em>I have a code</em>, and enter this email address with the code:`:undefined,
+  lines:[owning?`<strong>${esc(inviter)}</strong> set up <strong>${esc(title)}</strong> for you on Bookkit: your own place for your books, at ${esc(home.replace(/^https?:\/\//,''))}.`:`<strong>${esc(inviter)}</strong> invited you to ${forLibrary?'join':'work on'} <strong>${esc(title)}</strong> in Bookkit.`],
+  button:{label:forLibrary?'Open the library':'Open the book',url:hasCode?signInUrl(home,email,code!):link},
+  codeLead:hasCode?`Or go to ${esc(home.replace(/^https?:\/\//,''))}, choose <em>I have a code</em>, and enter this email address with the code:`:undefined,
   code:hasCode?code!:undefined,
   codeNote:hasCode?`The button and the code work once and expire after ${CODE_MINUTES} minutes. If they expire, use <em>Email me a sign-in code</em> on the sign-in page.`:undefined,
   footnote:'You can set a password later from the account menu. If you weren’t expecting this invitation, you can ignore it.',
@@ -134,7 +146,7 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
   to:email,
   from:{email:'invitations@bookkit.net',name:'Bookkit'},
   replyTo:user?.email,
-  subject:`${inviter} invited you to “${title}” on Bookkit`,
+  subject:owning?`${inviter} set up ${title} for you on Bookkit`:`${inviter} invited you to “${title}” on Bookkit`,
   text:mail.text,html:mail.html,
  });
  return json({sent:true,messageId:sent?.messageId??null});

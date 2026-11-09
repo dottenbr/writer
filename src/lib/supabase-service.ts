@@ -5,7 +5,8 @@
  * and inspiration file management goes through here.
  */
 
-import { supabase } from "./supabase-client";
+import { AUTH_STORAGE_KEY, supabase } from "./supabase-client";
+import { cookieStorage } from "./cookie-storage";
 import type {
   Project,
   ProjectAct,
@@ -140,8 +141,7 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
 /** The session Supabase keeps in this browser, read directly (no lock, no network). */
 export function storedSession(): { user: { id: string; email?: string }; refresh_token: string } | null {
   try {
-    const key = Object.keys(localStorage).find(k => /^sb-.+-auth-token$/.test(k));
-    const value = key ? JSON.parse(localStorage.getItem(key) ?? "null") : null;
+    const value = JSON.parse(cookieStorage.getItem(AUTH_STORAGE_KEY) ?? "null");
     const session = value?.currentSession ?? value;
     return session?.refresh_token && session?.user?.id ? session : null;
   } catch { return null; }
@@ -364,34 +364,23 @@ function mapDbComment(row: any): Comment {
 // Projects
 // ────────────────────────────────────────────────────────────
 
-export async function listProjects(): Promise<Array<{ id: string; name: string; role: ProjectRole }>> {
+export async function listProjects(): Promise<Array<{ id: string; name: string; role: ProjectRole; libraryId: string | null }>> {
   const user = await getCurrentUser();
   if (!user) return [];
-
-  // Owned projects
-  const { data: owned } = await supabase
-    .from("projects")
-    .select("id, name")
-    .eq("owner_id", user.id);
-
-  // Shared projects
-  const { data: memberships } = await supabase
-    .from("project_members")
-    .select("project_id, role, projects(id, name)")
-    .eq("user_id", user.id)
-    .not("accepted_at", "is", null);
-
-  const results: Array<{ id: string; name: string; role: ProjectRole }> = [];
-  for (const p of owned ?? []) {
-    results.push({ id: p.id, name: p.name, role: "owner" });
-  }
-  for (const m of memberships ?? []) {
-    const proj = (m as Record<string, unknown>).projects as { id: string; name: string } | null;
-    if (proj && !results.some((r) => r.id === proj.id)) {
-      results.push({ id: proj.id, name: proj.name, role: m.role as ProjectRole });
-    }
-  }
-  return results;
+  // Every book this account can open: owned, shared directly, or through a library.
+  const [{ data: projects }, { data: memberships }, { data: libraries }] = await Promise.all([
+    supabase.from("projects").select("id, name, owner_id, library_id, private").order("name"),
+    supabase.from("project_members").select("project_id, role").eq("user_id", user.id).not("accepted_at", "is", null),
+    supabase.rpc("bookkit_libraries"),
+  ]);
+  const memberRole = new Map((memberships ?? []).map(m => [m.project_id as string, m.role as ProjectRole]));
+  const libraryRole = new Map(((libraries ?? []) as Array<{ id: string; role: string }>).map(l => [l.id, l.role]));
+  return (projects ?? []).map(p => {
+    const fromLibrary = p.library_id && !p.private ? libraryRole.get(p.library_id) : undefined;
+    const role: ProjectRole = p.owner_id === user.id ? "owner"
+      : memberRole.get(p.id) ?? (fromLibrary === "owner" || fromLibrary === "coauthor" ? "coauthor" : fromLibrary === "editor" ? "editor" : "viewer");
+    return { id: p.id, name: p.name, role, libraryId: p.library_id ?? null };
+  });
 }
 
 export async function readProject(projectId: string): Promise<Project> {
@@ -408,7 +397,7 @@ export async function readProject(projectId: string): Promise<Project> {
     supabase.from("projects").select("*").eq("id", projectId).single(),
     supabase.from("acts").select("*").eq("project_id", projectId).order("sort_order"),
     supabase.from("chapters").select("*, scenes(*)").eq("project_id", projectId).order("sort_order"),
-    supabase.from("characters").select("*, character_relationships(*)").eq("project_id", projectId),
+    supabase.from("characters").select("*, character_relationships!character_relationships_character_id_fkey(*)").eq("project_id", projectId),
     supabase.from("threads").select("*").eq("project_id", projectId),
     supabase.from("locations").select("*").eq("project_id", projectId),
     supabase.from("codex_entries").select("*").eq("project_id", projectId),
@@ -1288,7 +1277,12 @@ export async function getProjectRole(projectId: string): Promise<ProjectRole | n
     .eq("project_id", projectId)
     .eq("user_id", user.id)
     .maybeSingle();
-  return (member?.role as ProjectRole) ?? null;
+  if (member?.role) return member.role as ProjectRole;
+  // Access through the book's library
+  const { data: book } = await supabase.from("projects").select("library_id, private").eq("id", projectId).maybeSingle();
+  if (!book?.library_id || book.private) return book ? "viewer" : null;
+  const { data: role } = await supabase.rpc("library_role", { p_library: book.library_id });
+  return role === "owner" || role === "coauthor" ? "coauthor" : role === "editor" ? "editor" : "viewer";
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1948,11 +1942,11 @@ export function newBookFiles(title: string, author: string, today = new Date().t
   };
 }
 
-export async function createBook(title: string, author: string): Promise<string> {
+export async function createBook(title: string, author: string, place: { libraryId?: string | null; shelfId?: string | null } = {}): Promise<string> {
   const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
   const { data: project, error } = await supabase.from('projects')
-    .insert({ owner_id: user.id, name: title, brief_title: title, bookkit_slug: 'new/' + crypto.randomUUID(), bookkit_import_complete: true })
+    .insert({ owner_id: user.id, name: title, brief_title: title, bookkit_slug: 'new/' + crypto.randomUUID(), bookkit_import_complete: true, library_id: place.libraryId ?? null, shelf_id: place.shelfId ?? null })
     .select('id').single();
   if (error || !project) throw error ?? new Error('Could not create the book');
   const projectId = project.id as string;
@@ -2047,6 +2041,9 @@ export interface WorkspaceBook {
   chapters_written: number;
   target_words: number;
   activity: Array<{ day: string; edits: number; words: number }>;
+  library_id: string | null;
+  shelf_id: string | null;
+  private: boolean;
 }
 
 /** Every book you can open, with progress and daily activity for the workspace. */
@@ -2054,4 +2051,96 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
   const { data, error } = await supabase.rpc('bookkit_workspace', { p_days: days });
   if (error) throw error;
   return (data ?? []) as WorkspaceBook[];
+}
+
+
+// ────────────────────────────────────────────────────────────
+// Libraries and shelves
+// ────────────────────────────────────────────────────────────
+
+export type LibraryRole = "owner" | "coauthor" | "editor" | "viewer" | "reader";
+export interface Shelf { id: string; name: string; position: number }
+export interface Library {
+  id: string; slug: string; name: string; description: string; role: LibraryRole;
+  owner_name: string | null; pending_owner: string | null;
+  shelves: Shelf[];
+  members: Array<{ user_id: string; role: "coauthor" | "editor" | "viewer"; name: string | null; email: string | null }>;
+  invitations: Array<{ id: string; email: string; role: "coauthor" | "editor" | "viewer" }>;
+  created_at: string;
+}
+
+export const LIBRARY_SLUG = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
+
+export async function loadLibraries(): Promise<Library[]> {
+  const { data, error } = await supabase.rpc('bookkit_libraries');
+  if (error) throw error;
+  return (data ?? []) as Library[];
+}
+
+export async function createLibrary(name: string, slug: string): Promise<string> {
+  const user = await getCurrentUser();
+  if (!user) throw new Error('Not authenticated');
+  const { data, error } = await supabase.from('libraries').insert({ name: name.trim(), slug: slug.trim().toLowerCase(), owner_id: user.id, created_by: user.id }).select('id').single();
+  if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'That address is taken. Try another.' : /check/i.test(error.message) ? 'Use lowercase letters, numbers and dashes for the address.' : error.message);
+  return data.id as string;
+}
+
+export async function updateLibrary(id: string, patch: { name?: string; slug?: string; description?: string }): Promise<void> {
+  const { error } = await supabase.from('libraries').update(patch).eq('id', id);
+  if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'That address is taken. Try another.' : /check/i.test(error.message) ? 'Use lowercase letters, numbers and dashes for the address (some names are reserved).' : error.message);
+}
+
+export async function addShelf(libraryId: string, name: string, position: number): Promise<void> {
+  const { error } = await supabase.from('shelves').insert({ library_id: libraryId, name: name.trim(), position });
+  if (error) throw error;
+}
+export async function renameShelf(id: string, name: string): Promise<void> {
+  const { error } = await supabase.from('shelves').update({ name: name.trim() }).eq('id', id);
+  if (error) throw error;
+}
+export async function reorderShelves(order: string[]): Promise<void> {
+  for (const [position, id] of order.entries()) {
+    const { error } = await supabase.from('shelves').update({ position }).eq('id', id);
+    if (error) throw error;
+  }
+}
+export async function deleteShelf(id: string): Promise<void> {
+  const { error } = await supabase.from('shelves').delete().eq('id', id);
+  if (error) throw error;
+}
+
+/** Put a book on a shelf (or none), move it to another library, or make it private. */
+export async function placeBook(projectId: string, patch: { library_id?: string | null; shelf_id?: string | null; private?: boolean }): Promise<void> {
+  const { error } = await supabase.from('projects').update(patch).eq('id', projectId);
+  if (error) throw new Error(error.message.replace(/^.*?: /, ''));
+}
+
+export async function inviteToLibrary(libraryId: string, email: string, role: "coauthor" | "editor" | "viewer"): Promise<void> {
+  const { error } = await supabase.from('library_invitations').upsert({ library_id: libraryId, email: email.trim().toLowerCase(), role }, { onConflict: 'library_id,email' });
+  if (error) throw error;
+}
+export async function removeLibraryInvitation(id: string): Promise<void> {
+  const { error } = await supabase.from('library_invitations').delete().eq('id', id);
+  if (error) throw error;
+}
+export async function setLibraryMemberRole(libraryId: string, userId: string, role: "coauthor" | "editor" | "viewer"): Promise<void> {
+  const { error } = await supabase.from('library_members').update({ role }).eq('library_id', libraryId).eq('user_id', userId);
+  if (error) throw error;
+}
+export async function removeLibraryMember(libraryId: string, userId: string): Promise<void> {
+  const { error } = await supabase.from('library_members').delete().eq('library_id', libraryId).eq('user_id', userId);
+  if (error) throw error;
+}
+/** Email a library invitation from bookkit.net (the invitee gets a sign-in code). */
+export async function emailLibraryInvite(libraryId: string, email: string): Promise<void> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch('/api/invite-link', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` }, body: JSON.stringify({ libraryId, email, send: true }) });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error ?? 'Could not send the invitation.');
+}
+
+export async function readBookPlacement(projectId: string): Promise<{ library_id: string | null; shelf_id: string | null; private: boolean }> {
+  const { data, error } = await supabase.from('projects').select('library_id, shelf_id, private').eq('id', projectId).single();
+  if (error) throw error;
+  return data as { library_id: string | null; shelf_id: string | null; private: boolean };
 }

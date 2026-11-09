@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { addShelf, deleteShelf, emailLibraryInvite, inviteToLibrary, LIBRARY_SLUG, removeLibraryInvitation, removeLibraryMember, renameShelf, reorderShelves, setLibraryMemberRole, updateLibrary, type Library } from "../lib/supabase-service";
+import { updateShelfStyle, addShelf, deleteShelf, emailLibraryInvite, inviteToLibrary, LIBRARY_SLUG, removeLibraryInvitation, removeLibraryMember, renameShelf, reorderShelves, setLibraryMemberRole, updateLibrary, type Library } from "../lib/supabase-service";
 import { libraryUrl } from "../lib/library-host";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { Icon } from "./studio/common";
+import { StyleFields } from "./studio/StyleFields";
+import type { HouseStyle } from "../lib/book-config";
 
 type Role = "coauthor" | "editor" | "viewer";
 const ROLES: Array<{ id: Role; label: string; hint: string }> = [
@@ -41,11 +43,40 @@ function General({ library, owner }: { library: Library; owner: boolean }) {
   );
 }
 
+function ShelfStyle({ shelf, canEdit, onSaved }: { shelf: Library["shelves"][number]; canEdit: boolean; onSaved: () => void }) {
+  const [style, setStyle] = useState<HouseStyle>((shelf.style ?? {}) as HouseStyle);
+  const [state, setState] = useState<"" | "saving">("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const changed = JSON.stringify(style) !== JSON.stringify(shelf.style ?? {});
+  return (
+    <div className="shelf-style">
+      <p className="settings-hint">Books on {shelf.name} that use the shelf’s style get these settings in their book.yaml.</p>
+      <StyleFields value={style} disabled={!canEdit} onChange={next => { setStyle(Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) as HouseStyle); setNote(""); }} />
+      {canEdit && (
+        <div className="dialog-actions left">
+          <button className="btn btn-sm btn-primary" disabled={!changed || state === "saving"} onClick={async () => {
+            setState("saving"); setError(""); setNote("");
+            try {
+              const { updated, skipped } = await updateShelfStyle(shelf.id, style as Record<string, unknown>);
+              setNote(`Saved.${updated.length ? ` Updated ${updated.join(", ")}.` : ""}${skipped.length ? ` ${skipped.join(", ")} will pick it up when their owners open them.` : ""}`);
+              onSaved();
+            } catch (e) { setError((e as Error).message); } finally { setState(""); }
+          }}>{state === "saving" ? "Saving…" : "Save style"}</button>
+          {note && <span className="muted">{note}</span>}
+        </div>
+      )}
+      {error && <div className="inline-error" role="alert">{error}</div>}
+    </div>
+  );
+}
+
 function Shelves({ library, canEdit }: { library: Library; canEdit: boolean }) {
   const reload = useLibraryStore(s => s.load);
   const [shelves, setShelves] = useState([...library.shelves].sort((a, b) => a.position - b.position));
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [styling, setStyling] = useState<string | null>(null);
   const run = async (fn: () => Promise<void>) => { setError(""); try { await fn(); await reload(); const next = useLibraryStore.getState().libraries?.find(l => l.id === library.id); if (next) setShelves([...next.shelves].sort((a, b) => a.position - b.position)); } catch (e) { setError((e as Error).message); } };
   const move = (i: number, by: number) => {
     const order = shelves.map(s => s.id);
@@ -58,13 +89,17 @@ function Shelves({ library, canEdit }: { library: Library; canEdit: boolean }) {
       <p className="settings-hint">Shelves group the books on your library page, like Fiction and Nonfiction. Drag books between shelves there, or use a book’s ⋯ menu.</p>
       <ul className="lib-shelves">
         {shelves.map((s, i) => (
-          <li key={s.id}>
+          <li key={s.id} className={styling === s.id ? "open" : ""}>
+            <div className="shelf-row">
             <input defaultValue={s.name} disabled={!canEdit} aria-label="Shelf name" onBlur={e => { const v = e.target.value.trim(); if (v && v !== s.name) void run(() => renameShelf(s.id, v)); }} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
             {canEdit && <>
               <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up"><Icon name="down" size={14} /></button>
               <button className="icon-btn" disabled={i === shelves.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><Icon name="down" size={14} /></button>
               <button className="icon-btn" onClick={() => { if (confirm(`Remove the shelf “${s.name}”? Its books stay in the library, without a shelf.`)) void run(() => deleteShelf(s.id)); }} aria-label={`Remove ${s.name}`}><Icon name="close" size={14} /></button>
             </>}
+            <button className="btn btn-sm" onClick={() => setStyling(styling === s.id ? null : s.id)} aria-expanded={styling === s.id}>Style{Object.keys(s.style ?? {}).length ? "" : " · not set"}</button>
+            </div>
+            {styling === s.id && <ShelfStyle shelf={s} canEdit={canEdit} onSaved={() => void run(async () => {})} />}
           </li>
         ))}
         {!shelves.length && <li className="muted">No shelves yet.</li>}

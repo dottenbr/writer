@@ -1,4 +1,5 @@
-import { HUMAN_AUTHORSHIP_POLICY, AI_PROMPT_LIMIT } from '../src/lib/ai-policy';
+import { AI_PROMPT_LIMIT } from '../src/lib/ai-policy';
+import { assistantPolicy, declaredPolicy } from '../src/lib/policy-blocks';
 interface Env { ASSETS:{fetch:(request:Request)=>Promise<Response>}; SUPABASE_URL:string; SUPABASE_PUBLISHABLE_KEY:string; SUPABASE_SECRET_KEY?:string; AI?:{run:(model:string,input:unknown,options?:unknown)=>Promise<any>}; EMAIL?:{send:(message:any)=>Promise<{messageId?:string}>} }
 /** Models included with Bookkit through Cloudflare Workers AI. No user key needed. */
 export const INCLUDED_MODELS=[
@@ -23,12 +24,19 @@ async function checkRequest(body:any,headers:Record<string,string>,env:Env,signa
  if(!access.ok||await access.json()!==true)return json({error:'Editing access to this book is required.'},403);
  return null;
 }
+
+/** The book's own AI policy (book.yaml `ai_policy`), as the assistant's instructions for this request. */
+async function bookPolicy(body:any,headers:Record<string,string>,env:Env,signal:AbortSignal):Promise<string>{
+ const rows:any=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_documents?select=content&project_id=eq.${body.projectId}&path=eq.book.yaml`,{headers,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const base=assistantPolicy(declaredPolicy(String(rows?.[0]?.content??'')));
+ return base+'\n\n'+(body.mode==='review'?'Return editorial observations only. Do not produce a replacement document.':'Return only the requested companion document. Do not turn narrative planning notes into manuscript prose.');
+}
 async function included(body:any,env:Env,headers:Record<string,string>,signal:AbortSignal):Promise<Response>{
  if(!env.AI)return json({error:'Included AI is not configured on this server.'},503);
  if(body.action==='models')return json({models:INCLUDED_MODELS});
  const model=INCLUDED_MODELS.find(m=>m.id===body.model)?.id??INCLUDED_MODELS[0].id;
  const rejected=await checkRequest(body,headers,env,signal,INCLUDED_PROMPT_LIMIT);if(rejected)return rejected;
- const policy=HUMAN_AUTHORSHIP_POLICY+(body.mode==='review'?' Return editorial observations only. Do not produce a replacement document.':' Return only the requested companion document. Do not turn narrative planning notes into manuscript prose.');
+ const policy=await bookPolicy(body,headers,env,signal);
  const max=body.mode==='companion'?16384:4096;
  const data=await env.AI.run(model,{messages:[{role:'system',content:policy},{role:'user',content:body.prompt}],max_tokens:max});
  const choice=data?.choices?.[0];
@@ -254,7 +262,7 @@ export default {async fetch(request:Request,env:Env):Promise<Response>{
   else{
    if(typeof body.model!=='string'||!body.model||body.model.length>160)return json({error:'Choose an available model in API Settings.'},400);
    const rejected=await checkRequest(body,headers,env,signal,AI_PROMPT_LIMIT);if(rejected)return rejected;
-   const policy=HUMAN_AUTHORSHIP_POLICY+(body.mode==='review'?' Return editorial observations only. Do not produce a replacement document.':' Return only the requested companion document. Do not turn narrative planning notes into manuscript prose.');
+   const policy=await bookPolicy(body,headers,env,signal);
    const max=body.mode==='companion'?16384:4096;
    const payload=body.provider==='anthropic'?{model:body.model,max_tokens:max,system:policy,messages:[{role:'user',content:body.prompt}]}:{model:body.model,max_completion_tokens:max,messages:[{role:'system',content:policy},{role:'user',content:body.prompt}]};
    upstream=await fetch(base+(body.provider==='anthropic'?'/messages':'/chat/completions'),{method:'POST',headers:providerHeaders,body:JSON.stringify(payload),signal});

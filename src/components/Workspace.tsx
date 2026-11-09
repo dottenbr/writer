@@ -210,7 +210,7 @@ function LibrarySwitcher({ current }: { current: Library | null | undefined }) {
           {libraries.map(l => (
             <a key={l.id} className={`menu-item ${current?.id === l.id ? "current" : ""}`} href={libraryUrl(l.slug)}>
               <Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span>
-              <span className="menu-meta">{l.slug}.bookkit.net</span>
+              <span className="menu-meta host">{l.slug}.bookkit.net</span>
             </a>
           ))}
         </div>

@@ -315,7 +315,9 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
       { label: "Title page", run: () => go(""), active: view === "write" && location.path === "" },
       { heading: `Chapters · ${model.chapters.length}` },
       ...model.chapters.map(c => ({ label: c.title || `Chapter ${c.number}`, num: c.number, dot: chapterState(c).key, run: () => go(c.authorPath ?? c.currentPath), active: chapterForPath(model.chapters, location.path)?.number === c.number })),
-      ...(isOwner ? [{ sep: true } as const, { label: "New chapter…", run: onNewChapter }] : []),
+      { sep: true } as const,
+      ...(isOwner ? [{ label: "New chapter…", run: onNewChapter }] : []),
+      { label: "Book configuration", run: () => setView("settings"), active: view === "settings" },
     ] },
     { id: "plan", label: "Plan", icon: "grid", run: () => setView("plan"), items: [
       { label: "Brief", run: () => go("@brief"), active: location.path === "@brief" },

@@ -9,11 +9,8 @@ import { exportManuscriptDocx, exportManuscriptText } from "../../lib/export-boo
 import { Collaboration } from "../Collaboration";
 import { SnapshotBrowser } from "../SnapshotBrowser";
 import { Icon, useAccess } from "./common";
+import { BookConfiguration } from "./BookConfiguration";
 
-function yamlLine(content: string, key: string, value: string) {
-  const line = `${key}: ${JSON.stringify(value)}`;
-  return new RegExp(`^${key}:.*$`, "m").test(content) ? content.replace(new RegExp(`^${key}:.*$`, "m"), line) : content + `\n${line}\n`;
-}
 
 /** Which library and shelf the book is on, and whether the library's people can open it. */
 function LibraryCard() {
@@ -74,28 +71,15 @@ export function BookSettings() {
   const files = useBookStore(s => s.files);
   const upsert = useBookStore(s => s.upsert);
   const project = useProjectStore(s => s.currentProject());
-  const renameProject = useProjectStore(s => s.renameProject);
   const deleteProject = useProjectStore(s => s.deleteProject);
   const importProjectZip = useProjectStore(s => s.importProjectZip);
   const setShowApiSettings = useProjectStore(s => s.setShowApiSettings);
   const { isOwner, projectId, canEdit } = useAccess();
-  const [title, setTitle] = useState(model.title);
-  const [author, setAuthor] = useState(model.author);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
   const [confirmDelete, setConfirmDelete] = useState("");
 
-  async function saveDetails() {
-    const yaml = files.find(f => f.path === "book.yaml");
-    if (!yaml || !projectId) return;
-    setBusy("details"); setMessage("");
-    try {
-      const next = yamlLine(yamlLine(yaml.content, "title", title.trim()), "author", author.trim());
-      if (next !== yaml.content) upsert({ ...(await saveBookDocument(projectId, "book.yaml", next, yaml.version)), loaded: true });
-      if (project && title.trim() && title.trim() !== project.name) await renameProject(project.id, title.trim());
-      setMessage("Book details saved.");
-    } catch (e) { setMessage((e as Error).message); } finally { setBusy(""); }
-  }
+
 
   const written = model.chapters.filter(c => c.authorPath && (!c.started || !c.referencePath)).length;
 
@@ -108,15 +92,7 @@ export function BookSettings() {
         </div>
       </header>
 
-      <section className="settings-card">
-        <h2>Details</h2>
-        <div className="settings-grid">
-          <label className="field">Title<input value={title} disabled={!isOwner} onChange={e => setTitle(e.target.value)} /></label>
-          <label className="field">Author<input value={author} disabled={!isOwner} onChange={e => setAuthor(e.target.value)} /></label>
-        </div>
-        {isOwner && <button className="btn btn-primary btn-sm" disabled={busy === "details" || (title === model.title && author === model.author) || !title.trim()} onClick={() => void saveDetails()}>Save details</button>}
-        <p className="settings-hint">This book follows a human-authored policy: the assistant can give editorial notes and help with plan and bible pages, but never writes your prose.</p>
-      </section>
+      <BookConfiguration />
 
       <LibraryCard />
 

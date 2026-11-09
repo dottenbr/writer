@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../../worker/index";
-import { HUMAN_AUTHORSHIP_POLICY } from "./ai-policy";
+import { policy } from "./policy-blocks";
 
 afterEach(() => vi.unstubAllGlobals());
 const PID = "12345678-1234-1234-1234-123456789abc";
@@ -9,14 +9,17 @@ const post = (path: string, body: unknown, headers: Record<string, string> = {})
   new Request("https://bookkit.test" + path, { method: "POST", headers: { Authorization: "Bearer session", ...headers }, body: JSON.stringify(body) });
 
 describe("included AI (Workers AI)", () => {
-  it("answers without a provider key and applies the authorship policy", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ id: "user" })).mockResolvedValueOnce(Response.json(true)));
+  it("answers without a provider key and applies the book's own AI policy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ id: "user" })).mockResolvedValueOnce(Response.json(true)).mockResolvedValueOnce(Response.json([{ content: "title: X\nai_policy: ai-assisted\n" }])));
     const run = vi.fn().mockResolvedValue({ choices: [{ finish_reason: "stop", message: { content: "Note: tighten the opening." } }] });
     const res = await worker.fetch(post("/api/ai", { provider: "bookkit", action: "complete", mode: "review", prompt: "Text", model: "@cf/zai-org/glm-5.3", projectId: PID }), { ...baseEnv, AI: { run } } as any);
     expect(res.status).toBe(200);
     expect((await res.json()).text).toBe("Note: tighten the opening.");
     expect(run.mock.calls[0][0]).toBe("@cf/zai-org/glm-5.3");
-    expect(run.mock.calls[0][1].messages[0].content).toContain(HUMAN_AUTHORSHIP_POLICY);
+    const system = run.mock.calls[0][1].messages[0].content;
+    expect(system).toContain('bookkit AI policy "ai-assisted"');
+    expect(system).toContain(policy("ai-assisted")!.block.slice(0, 120));
+    expect(system).toContain("Never generate, continue, rewrite");
   });
 
   it("refuses without book access and rejects truncated answers", async () => {
@@ -25,7 +28,7 @@ describe("included AI (Workers AI)", () => {
     const denied = await worker.fetch(post("/api/ai", { provider: "bookkit", action: "complete", mode: "review", prompt: "Text", model: "x", projectId: PID }), { ...baseEnv, AI: { run } } as any);
     expect(denied.status).toBe(403);
     expect(run).not.toHaveBeenCalled();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ id: "user" })).mockResolvedValueOnce(Response.json(true)));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ id: "user" })).mockResolvedValueOnce(Response.json(true)).mockResolvedValueOnce(Response.json([])));
     const cut = await worker.fetch(post("/api/ai", { provider: "bookkit", action: "complete", mode: "review", prompt: "Text", model: "x", projectId: PID }), { ...baseEnv, AI: { run: async () => ({ choices: [{ finish_reason: "length", message: { content: "Half" } }] }) } } as any);
     expect(cut.status).toBe(422);
   });

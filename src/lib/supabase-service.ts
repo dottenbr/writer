@@ -7,6 +7,8 @@
 
 import { AUTH_STORAGE_KEY, supabase } from "./supabase-client";
 import { cookieStorage } from "./cookie-storage";
+import { policy as policyDefinition, syncPolicy } from "./policy-blocks";
+import { STYLE_KEYS } from "./book-config";
 import type {
   Project,
   ProjectAct,
@@ -1923,13 +1925,18 @@ export async function downloadBookAsset(projectId:string,doc:BookDocumentRow):Pr
 // New books start as a clean Bookkit structure
 // ────────────────────────────────────────────────────────────
 
-export function newBookFiles(title: string, author: string, today = new Date().toISOString().slice(0, 10)): Record<string, string> {
-  const slug = title.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
+export function newBookFiles(title: string, author: string, today = new Date().toISOString().slice(0, 10), shelfStyle?: Record<string, unknown> | null): Record<string, string> {
+  const slug = title.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
   const q = (s: string) => JSON.stringify(s);
   const checked = `---\nchecked: ${today}\n---\n\n`;
+  const style = shelfStyle && Object.keys(shelfStyle).length ? shelfStyle : null;
+  const ordered = style ? STYLE_KEYS.filter(k => style[k] != null).map(k => [k, style[k]] as const) : [];
+  const styleBlock = ordered.length ? `style:\n  inherit: shelf\n${ordered.map(([k, v]) => `  ${k}: ${v}`).join('\n')}\n\n` : '';
+  const policyDocs = syncPolicy({ 'README.md': `# ${title}\n\nA book by ${author || 'the author'}, written in Bookkit.\n`, 'CLAUDE.md': `# CLAUDE.md\n\nGuidance for anyone, person or model, working on this book.\n` }, policyDefinition('human-authored')!, title);
   return {
-    'book.yaml': `slug: ${slug}\ntitle: ${q(title)}\nauthor: ${q(author)}\nlanguage: en-US\n\nai_policy: human-authored\n\ncompanion:\n  standard: 1\n\nmanuscript:\n  dir: manuscript\n  layout: flat\n  scenes: false\n  front_matter:\n    required: [chapter, title, status]\n\npublication:\n  formats: [docx, epub, pdf]\n  title_page: true\n`,
-    'README.md': `# ${title}\n\nA book by ${author || 'the author'}, written in Bookkit.\n`,
+    'book.yaml': `slug: ${slug}\ntitle: ${q(title)}\nauthor: ${q(author)}\nbyline: own-name\nlanguage: en-US\nkind: fiction\n\nai_policy: human-authored\n\n${styleBlock}manuscript:\n  dir: manuscript\n  layout: flat\n  scenes: false\n  front_matter:\n    required: [chapter, title, status]\n\npublication:\n  formats: [docx, epub, pdf]\n  title_page: true\n\ncompanion:\n  standard: 1\n`,
+    'README.md': policyDocs['README.md'],
+    'CLAUDE.md': policyDocs['CLAUDE.md'],
     'manuscript/01-chapter-one.md': `---\nchapter: 1\ntitle: "Chapter One"\nstatus: drafting\n---\n\n# Chapter 1\n\n`,
     'bible/book-on-one-page.md': `${checked}# The book on one page\n\nWhat happens, start to finish, in about 250 words.\n\n## Dramatic question\n\n## Shape\n\n## What the book is about\n`,
     'bible/characters.md': `${checked}# Characters\n\nEveryone who matters, as the chapters have them.\n`,
@@ -1956,7 +1963,9 @@ export async function createBook(title: string, author: string, place: { library
     await must(supabase.from('project_settings').insert({ project_id: projectId }));
     await must(supabase.from('llm_settings').insert({ project_id: projectId }));
     await must(supabase.from('export_configs').insert({ project_id: projectId, author }));
-    const rows = Object.entries(newBookFiles(title, author)).map(([path, content]) => ({ project_id: projectId, path, content, source_sha256: 'new-human-document' }));
+    let shelfStyle: Record<string, unknown> | null = null;
+    if (place.shelfId) shelfStyle = ((await supabase.from('shelves').select('style').eq('id', place.shelfId).maybeSingle()).data?.style as Record<string, unknown>) ?? null;
+    const rows = Object.entries(newBookFiles(title, author, undefined, shelfStyle)).map(([path, content]) => ({ project_id: projectId, path, content, source_sha256: 'new-human-document' }));
     await must(supabase.from('bookkit_documents').insert(rows));
     return projectId;
   } catch (e) {
@@ -2059,7 +2068,7 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
 // ────────────────────────────────────────────────────────────
 
 export type LibraryRole = "owner" | "coauthor" | "editor" | "viewer" | "reader";
-export interface Shelf { id: string; name: string; position: number }
+export interface Shelf { id: string; name: string; position: number; style?: Record<string, unknown> }
 export interface Library {
   id: string; slug: string; name: string; description: string; role: LibraryRole;
   owner_name: string | null; pending_owner: string | null;
@@ -2143,4 +2152,25 @@ export async function readBookPlacement(projectId: string): Promise<{ library_id
   const { data, error } = await supabase.from('projects').select('library_id, shelf_id, private').eq('id', projectId).single();
   if (error) throw error;
   return data as { library_id: string | null; shelf_id: string | null; private: boolean };
+}
+
+/** Save a shelf's house style and write it into the books on the shelf that inherit it (those you own). */
+export async function updateShelfStyle(shelfId: string, style: Record<string, unknown>): Promise<{ updated: string[]; skipped: string[] }> {
+  const { error } = await supabase.from('shelves').update({ style }).eq('id', shelfId);
+  if (error) throw error;
+  const { applyShelfStyle } = await import('./book-config');
+  const user = await getCurrentUser();
+  const { data: books } = await supabase.from('projects').select('id, name, owner_id').eq('shelf_id', shelfId);
+  const updated: string[] = [], skipped: string[] = [];
+  for (const book of books ?? []) {
+    try {
+      const row = await readBookDocument(book.id, 'book.yaml');
+      const next = applyShelfStyle(row.content, style);
+      if (next === row.content) continue;
+      if (book.owner_id !== user?.id) { skipped.push(book.name); continue; }
+      await saveBookDocument(book.id, 'book.yaml', next, row.version);
+      updated.push(book.name);
+    } catch { skipped.push(book.name); }
+  }
+  return { updated, skipped };
 }

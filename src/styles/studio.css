@@ -1080,3 +1080,38 @@ a.menu-item { text-decoration: none; }
   .ws-shelf { margin-left: -6px; margin-right: -6px; padding: 6px; }
 }
 @media (max-width: 900px) { .ws-grid > .ws-book-wrap:has(.ws-book.featured) { grid-column: auto; } }
+/* The page itself never scrolls (the editor scrolls its panes); the workspace scrolls inside. */
+.workspace { height: 100vh; height: 100dvh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.menu-meta.host, .ws-library-host { text-transform: none; }
+
+/* ---------- book configuration and house style ---------- */
+.config-card { gap: 18px; }
+.config-head { display: flex; flex-direction: column; gap: 2px; }
+.config-head code, .settings-hint code, .check-row code { font-size: 12px; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+.config-group { display: flex; flex-direction: column; gap: 10px; width: 100%; padding-top: 14px; border-top: 1px solid var(--line); }
+.config-group h3 { margin: 0; font: 600 12px var(--ui); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); }
+.settings-hint.warn { color: var(--danger); }
+.policy-options { display: grid; gap: 8px; }
+.policy-option { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; font: 13.5px/1.45 var(--ui); }
+.policy-option.on { border-color: var(--accent); background: var(--accent-softer); }
+.policy-option input { margin-top: 3px; }
+.policy-summary { color: var(--ink-2); }
+.policy-status { display: flex; align-items: flex-start; gap: 6px; font: 13px/1.45 var(--ui); color: var(--written, var(--ink-2)); }
+.policy-status.warn { color: var(--danger); }
+.inherit-switch { align-self: flex-start; flex-wrap: wrap; }
+.style-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 16px; width: 100%; }
+.style-field { display: flex; flex-direction: column; gap: 4px; font: 12.5px var(--ui); color: var(--ink-2); }
+.style-label { font-weight: 600; }
+.style-field select { height: 34px; border: 1px solid var(--line-2); border-radius: 8px; padding: 0 8px; font: 14px var(--ui); background: var(--surface); color: var(--ink); }
+.style-field select:disabled { background: var(--surface-2); color: var(--ink-2); }
+.style-example { min-height: 16px; font: italic 12.5px var(--display); color: var(--ink-3); }
+.check-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; font: 13px var(--ui); cursor: pointer; }
+.config-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%; padding-top: 14px; border-top: 1px solid var(--line); }
+.yaml-preview { width: 100%; box-sizing: border-box; max-height: 420px; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); white-space: pre; }
+.lib-shelves li { display: block; }
+.lib-shelves .shelf-row { display: flex; align-items: center; gap: 4px; }
+.lib-shelves li.open { background: var(--surface-2); border-radius: 10px; padding: 6px; }
+.shelf-style { padding: 10px 4px 4px; display: flex; flex-direction: column; gap: 10px; }
+.shelf-style .style-fields { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.check-chip input[type="checkbox"], .check-row input[type="checkbox"] { appearance: auto; -webkit-appearance: checkbox; width: 14px; height: 14px; min-width: 0; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); flex: none; }
+.check-row input[type="checkbox"] { margin-top: 3px; }

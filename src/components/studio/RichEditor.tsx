@@ -3,7 +3,7 @@ import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { createRoot } from "react-dom/client";
 import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig } from "../../lib/editor-extensions";
 import { SceneCardInline } from "./SceneCardInline";
-import { docToMarkdown, markdownToHtml, nodeToMarkdown, type JSONNode } from "../../lib/markdown-doc";
+import { docToMarkdown, escapeHtml, markdownToHtml, nodeToMarkdown, type JSONNode } from "../../lib/markdown-doc";
 import { useBookStore } from "../../store/useBookStore";
 import { parseScenes } from "../../lib/scene-cards";
 
@@ -87,7 +87,18 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
       count: scenes?.count ?? 0,
       render: path ? (index: number, el: HTMLElement, waiting: boolean) => {
         const root = createRoot(el);
-        root.render(<SceneCardInline path={path} index={index} waiting={waiting} onBegin={waiting && editor.isEditable ? () => editor.chain().focus("end").setHorizontalRule().run() : undefined} />);
+        const beginScene = () => {
+          const state = useBookStore.getState();
+          const useHeadings = Boolean(state.model?.config?.manuscript?.scenes);
+          const scenesRaw = state.files.find(f => f.path === path)?.content;
+          const card = scenesRaw ? parseScenes(scenesRaw)[index] : undefined;
+          if (useHeadings && card) {
+            editor.chain().focus("end").insertContent(`<h2>${escapeHtml(card.heading)}</h2><p></p>`).run();
+          } else {
+            editor.chain().focus("end").setHorizontalRule().run();
+          }
+        };
+        root.render(<SceneCardInline path={path} index={index} waiting={waiting} onBegin={waiting && editor.isEditable ? beginScene : undefined} />);
         return () => setTimeout(() => root.unmount(), 0);
       } : null,
     };

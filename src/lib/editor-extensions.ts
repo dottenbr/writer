@@ -83,54 +83,58 @@ export interface LinkConfig {
 
 export const bookLinksKey = new PluginKey<DecorationSet>("bookLinks");
 
+function decorationsForBlock(node: PMNode, pos: number, config: LinkConfig, decos: Decoration[]) {
+  let text = "";
+  const offsets: number[] = [];
+  node.forEach((child, offset) => {
+    if (child.isText) {
+      for (let i = 0; i < child.text!.length; i++) offsets.push(pos + 1 + offset + i);
+      text += child.text;
+    } else {
+      offsets.push(pos + 1 + offset);
+      text += "\n";
+    }
+  });
+  if (!text) return;
+  const range = (start: number, end: number) => [offsets[start], offsets[end - 1] + 1] as const;
+  if (config.entities?.regex && node.type.name !== "heading") {
+    for (const m of text.matchAll(config.entities.regex)) {
+      const e = config.entities.byAlias.get(m[0]);
+      if (!e) continue;
+      const [from, to] = range(m.index!, m.index! + m[0].length);
+      decos.push(Decoration.inline(from, to, { class: `entity-ref entity-${e.kind}`, "data-entity": e.id }));
+    }
+  }
+  if (config.chapterAnchors) {
+    for (const m of text.matchAll(CHAPTER_ANCHOR)) {
+      const [from, to] = range(m.index!, m.index! + m[0].length);
+      decos.push(Decoration.inline(from, to, { class: "chapter-ref", "data-chapters": m[1], title: "⌘-click to open the chapter" }));
+    }
+  }
+  for (const c of config.comments ?? []) {
+    const q = c.quote.trim();
+    if (q.length < 2) continue;
+    let at = text.indexOf(q);
+    while (at >= 0) {
+      const [from, to] = range(at, at + q.length);
+      decos.push(Decoration.inline(from, to, { class: c.active ? "bk-comment active" : "bk-comment", "data-thread": c.id }));
+      at = text.indexOf(q, at + q.length);
+    }
+  }
+  if (config.flash) {
+    const at = text.toLowerCase().indexOf(config.flash.toLowerCase());
+    if (at >= 0) {
+      const [from, to] = range(at, at + config.flash.length);
+      decos.push(Decoration.inline(from, to, { class: "flash-mark" }));
+    }
+  }
+}
+
 function buildDecorations(doc: PMNode, config: LinkConfig): DecorationSet {
   const decos: Decoration[] = [];
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
-    let text = "";
-    const offsets: number[] = [];
-    node.forEach((child, offset) => {
-      if (child.isText) {
-        for (let i = 0; i < child.text!.length; i++) offsets.push(pos + 1 + offset + i);
-        text += child.text;
-      } else {
-        offsets.push(pos + 1 + offset);
-        text += "\n";
-      }
-    });
-    if (!text) return false;
-    const range = (start: number, end: number) => [offsets[start], offsets[end - 1] + 1] as const;
-    if (config.entities?.regex && node.type.name !== "heading") {
-      for (const m of text.matchAll(config.entities.regex)) {
-        const e = config.entities.byAlias.get(m[0]);
-        if (!e) continue;
-        const [from, to] = range(m.index!, m.index! + m[0].length);
-        decos.push(Decoration.inline(from, to, { class: `entity-ref entity-${e.kind}`, "data-entity": e.id }));
-      }
-    }
-    if (config.chapterAnchors) {
-      for (const m of text.matchAll(CHAPTER_ANCHOR)) {
-        const [from, to] = range(m.index!, m.index! + m[0].length);
-        decos.push(Decoration.inline(from, to, { class: "chapter-ref", "data-chapters": m[1], title: "⌘-click to open the chapter" }));
-      }
-    }
-    for (const c of config.comments ?? []) {
-      const q = c.quote.trim();
-      if (q.length < 2) continue;
-      let at = text.indexOf(q);
-      while (at >= 0) {
-        const [from, to] = range(at, at + q.length);
-        decos.push(Decoration.inline(from, to, { class: c.active ? "bk-comment active" : "bk-comment", "data-thread": c.id }));
-        at = text.indexOf(q, at + q.length);
-      }
-    }
-    if (config.flash) {
-      const at = text.toLowerCase().indexOf(config.flash.toLowerCase());
-      if (at >= 0) {
-        const [from, to] = range(at, at + config.flash.length);
-        decos.push(Decoration.inline(from, to, { class: "flash-mark" }));
-      }
-    }
+    decorationsForBlock(node, pos, config, decos);
     return false;
   });
   return DecorationSet.create(doc, decos);
@@ -145,7 +149,37 @@ export const BookLinks = Extension.create<{}, { config: LinkConfig }>({
       key: bookLinksKey,
       state: {
         init: (_, state) => buildDecorations(state.doc, storage.config),
-        apply: (tr, old, _o, state) => (tr.docChanged || tr.getMeta(bookLinksKey) ? buildDecorations(state.doc, storage.config) : old.map(tr.mapping, tr.doc)),
+        apply: (tr, old, _o, state) => {
+          if (tr.getMeta(bookLinksKey)) return buildDecorations(state.doc, storage.config);
+          if (!tr.docChanged) return old;
+          let minFrom = state.doc.content.size;
+          let maxTo = 0;
+          for (let i = 0; i < tr.steps.length; i++) {
+            const map = tr.mapping.maps[i];
+            const rest = tr.mapping.slice(i + 1);
+            map.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
+              const from = rest.map(newStart, -1);
+              const to = rest.map(newEnd, 1);
+              if (from < minFrom) minFrom = from;
+              if (to > maxTo) maxTo = to;
+            });
+          }
+          if (minFrom <= maxTo && maxTo - minFrom < 2000) {
+            let mapped = old.map(tr.mapping, state.doc);
+            const added: Decoration[] = [];
+            const fromPos = Math.max(0, minFrom);
+            const toPos = Math.min(state.doc.content.size, maxTo);
+            state.doc.nodesBetween(fromPos, toPos, (node, pos) => {
+              if (!node.isTextblock) return true;
+              const existing = mapped.find(pos, pos + node.nodeSize);
+              if (existing.length) mapped = mapped.remove(existing);
+              decorationsForBlock(node, pos, storage.config, added);
+              return false;
+            });
+            return added.length ? mapped.add(state.doc, added) : mapped;
+          }
+          return buildDecorations(state.doc, storage.config);
+        },
       },
       props: { decorations: state => bookLinksKey.getState(state) },
     })];

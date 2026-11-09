@@ -168,12 +168,19 @@ export function ManuscriptView() {
   const model = useBookStore(s => s.model)!;
   const files = useBookStore(s => s.files);
   const location = useBookStore(s => s.location);
+  const visibleChapter = useBookStore(s => s.visibleChapter);
   const setVisibleChapter = useBookStore(s => s.setVisibleChapter);
+  const listeningChapter = useListenStore(s => s.chapter);
   const { canEdit } = useAccess();
   const matcher = useEntityMatcher();
   const [active, setActive] = useState<{ number: number; point: { x: number; y: number } | null } | null>(null);
   const [session, setSession] = useState<DocSession | null>(null);
+  const [nearChapters, setNearChapters] = useState<Set<number>>(() => {
+    const initial = chapterForPath(model.chapters, location.path)?.number ?? model.chapters[0]?.number ?? 1;
+    return new Set([initial - 1, initial, initial + 1, initial + 2]);
+  });
   const refs = useRef(new Map<number, HTMLElement>());
+  const proseHeights = useRef(new Map<number, number>());
   const scroller = useRef<HTMLDivElement>(null);
   const setBusSession = useEditorBus(s => s.setSession);
 
@@ -184,6 +191,13 @@ export function ManuscriptView() {
       if (location.path === "") scroller.current?.closest(".main-scroll")?.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
+    setNearChapters(prev => {
+      const next = new Set(prev);
+      next.add(chapter.number - 1);
+      next.add(chapter.number);
+      next.add(chapter.number + 1);
+      return next;
+    });
     setActive({ number: chapter.number, point: null });
     const scroll = (behavior: ScrollBehavior) => refs.current.get(chapter.number)?.scrollIntoView({ behavior, block: "start" });
     requestAnimationFrame(() => scroll("instant" as ScrollBehavior));
@@ -192,24 +206,46 @@ export function ManuscriptView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.nonce]);
 
-  // Track which chapter is on screen.
+  // Track which chapter is on screen and pre-hydrate chapters near the viewport.
   useEffect(() => {
     const root = scroller.current?.closest(".main-scroll");
     if (!root) return;
     const seen = new Map<number, number>();
+    const nearSet = new Set<number>();
     const observer = new IntersectionObserver(entries => {
       for (const e of entries) seen.set(Number((e.target as HTMLElement).dataset.chapter), e.isIntersecting ? e.boundingClientRect.top : Infinity);
       const visible = [...seen.entries()].filter(([, top]) => top !== Infinity).sort((a, b) => a[1] - b[1]);
       const top = visible.find(([, t]) => t > -window.innerHeight * 0.6) ?? visible[0];
       setVisibleChapter(top?.[0]);
     }, { root, rootMargin: "-10% 0px -60% 0px" });
-    refs.current.forEach(el => observer.observe(el));
-    return () => observer.disconnect();
+    const hydrateObserver = new IntersectionObserver(entries => {
+      let changed = false;
+      for (const e of entries) {
+        const num = Number((e.target as HTMLElement).dataset.chapter);
+        if (e.isIntersecting) {
+          if (!nearSet.has(num)) { nearSet.add(num); changed = true; }
+        } else {
+          const proseEl = (e.target as HTMLElement).querySelector(".doc-prose.static") as HTMLElement | null;
+          if (proseEl && proseEl.offsetHeight > 0) proseHeights.current.set(num, proseEl.offsetHeight);
+          if (nearSet.delete(num)) changed = true;
+        }
+      }
+      if (changed) setNearChapters(new Set(nearSet));
+    }, { root, rootMargin: "1200px 0px 1200px 0px" });
+    refs.current.forEach(el => {
+      observer.observe(el);
+      hydrateObserver.observe(el);
+    });
+    return () => {
+      observer.disconnect();
+      hydrateObserver.disconnect();
+    };
   }, [model.chapters.length, setVisibleChapter]);
 
   useEffect(() => () => setBusSession(null), [setBusSession]);
 
   const content = (path?: string) => (path ? files.find(f => f.path === path)?.content ?? "" : "");
+  const anchorCenter = visibleChapter ?? chapterForPath(model.chapters, location.path)?.number ?? model.chapters[0]?.number ?? 1;
 
   let lastPart = "";
   return (
@@ -221,8 +257,10 @@ export function ManuscriptView() {
         const path = c.authorPath ?? c.referencePath!;
         const isActive = active?.number === c.number;
         const showReference = !c.authorPath;
+        const isHydrated = isActive || listeningChapter === c.number || nearChapters.has(c.number) || Math.abs(c.number - anchorCenter) <= 1;
         const partHeader = c.part && c.part.key !== lastPart ? c.part : null;
         if (c.part) lastPart = c.part.key;
+        const estimatedHeight = proseHeights.current.get(c.number) ?? Math.max(240, Math.round((c.authorWords || c.referenceWords || 600) * 0.42));
         return (
           <div key={c.number}>
             {partHeader && <div className="part-divider"><span>{partHeader.title}</span></div>}
@@ -245,13 +283,22 @@ export function ManuscriptView() {
                   onSession={setSession}
                   scenesPath={c.scenesPath}
                 />
-              ) : (
+              ) : isHydrated ? (
                 <StaticProse
                   matcher={matcher}
                   body={splitDocument(content(path)).body}
                   className={showReference ? "reference" : ""}
                   scenesPath={c.scenesPath}
                   onActivate={point => setActive({ number: c.number, point: canEdit && !showReference ? point : null })}
+                />
+              ) : (
+                <div
+                  className={`doc-prose static chapter-deferred ${showReference ? "reference" : ""}`}
+                  style={{ minHeight: `${estimatedHeight}px` }}
+                  onMouseUp={e => {
+                    if (window.getSelection()?.toString()) return;
+                    setActive({ number: c.number, point: canEdit && !showReference ? { x: e.clientX, y: e.clientY } : null });
+                  }}
                 />
               )}
               {!isActive && c.authorPath && !splitDocument(content(path)).body.trim() && (

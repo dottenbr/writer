@@ -65,7 +65,7 @@ describe("invitation links", () => {
     const res = await worker.fetch(post("/api/invite-link", { projectId: PID, email: "a@b.co", send: true }), { ...env, EMAIL: { send } });
     expect(await res.json()).toEqual({ sent: true, messageId: "m1" });
     const msg = send.mock.calls[0][0];
-    expect(msg).toMatchObject({ to: "a@b.co", from: { email: "invitations@bookkit.net", name: "Bookkit" }, replyTo: "author@example.com" });
+    expect(msg).toMatchObject({ to: "a@b.co", from: { email: "noreply@bookkit.net", name: "Bookkit" }, replyTo: "author@example.com" });
     expect(msg.subject).toBe("Ann <Author> invited you to “Cold Solder” on Bookkit");
     expect(msg.html).toContain("Ann &lt;Author&gt;");
     const code = msg.text.match(/\b(\d{3}) (\d{3})\b/);
@@ -82,7 +82,8 @@ describe("invitation links", () => {
 
 function fakeSupabase() {
   const codes = new Map<string, any>();
-  const meta: Record<string, any> = { me: {} };
+  const profiles = new Map<string, string>([["me@example.com", "me"]]);
+  const meta: Record<string, any> = { me: {}, invitee: {} };
   let verified = 0;
   const fetch = vi.fn(async (input: string, init: any = {}) => {
     const url = new URL(input);
@@ -92,13 +93,32 @@ function fakeSupabase() {
     if (path === "/auth/v1/user") return Response.json({ id: "owner", email: "author@example.com", user_metadata: { display_name: "Ann <Author>" } });
     if (path === "/rest/v1/projects" && url.searchParams.get("select") === "id") return Response.json([{ id: PID }]);
     if (path === "/rest/v1/projects") return Response.json([{ name: "Cold Solder" }]);
-    if (path === "/rest/v1/project_invitations") return Response.json([{ id: "inv" }]);
-    if (path === "/rest/v1/profiles") return Response.json(url.searchParams.get("email") === "eq.me@example.com" ? [{ id: "me" }] : []);
-    if (path === "/auth/v1/admin/users/me" && method === "GET") return Response.json({ id: "me", app_metadata: meta.me });
-    if (path === "/auth/v1/admin/users/me" && method === "PUT") { meta.me = body.app_metadata; return Response.json({}); }
-    if (path === "/auth/v1/admin/generate_link") return Response.json(body.type === "invite"
-      ? { id: "invitee", action_link: "https://project.supabase.co/auth/v1/verify?token=t", hashed_token: "hash-invite", verification_type: "invite" }
-      : { id: "me", action_link: "https://project.supabase.co/auth/v1/verify?token=x", hashed_token: "hash-me", email_otp: "87654321", verification_type: "magiclink" });
+    if (path === "/rest/v1/libraries") return Response.json(url.searchParams.get("owner_email") === "eq.carly@example.com" ? [{ id: "lib-carly" }] : []);
+    if (path === "/rest/v1/library_invitations") return Response.json([]);
+    if (path === "/rest/v1/project_invitations") {
+      const emailParam = url.searchParams.get("email");
+      return Response.json(emailParam === "eq.a@b.co" || emailParam === "eq.carly@example.com" ? [{ id: "inv" }] : []);
+    }
+    if (path === "/rest/v1/profiles") {
+      const email = (url.searchParams.get("email") ?? "").replace(/^eq\./, "");
+      return Response.json(profiles.has(email) ? [{ id: profiles.get(email) }] : []);
+    }
+    if (path.startsWith("/auth/v1/admin/users/") && method === "GET") {
+      const uid = path.split("/").pop()!;
+      return Response.json({ id: uid, app_metadata: meta[uid] ?? {} });
+    }
+    if (path.startsWith("/auth/v1/admin/users/") && method === "PUT") {
+      const uid = path.split("/").pop()!;
+      meta[uid] = body.app_metadata;
+      return Response.json({});
+    }
+    if (path === "/auth/v1/admin/generate_link") {
+      if (body.type === "invite") {
+        profiles.set(body.email, "invitee");
+        return Response.json({ id: "invitee", action_link: "https://project.supabase.co/auth/v1/verify?token=t", hashed_token: "hash-invite", verification_type: "invite" });
+      }
+      return Response.json({ id: "me", action_link: "https://project.supabase.co/auth/v1/verify?token=x", hashed_token: "hash-me", email_otp: "87654321", verification_type: "magiclink" });
+    }
     if (path === "/rest/v1/bookkit_sign_in_codes") {
       const id = (url.searchParams.get("user_id") ?? "").replace("eq.", "");
       if (method === "POST") { codes.set(body.user_id, body); return new Response(null, { status: 201 }); }
@@ -109,17 +129,17 @@ function fakeSupabase() {
     if (path === "/auth/v1/verify") { verified++; return Response.json({ access_token: "at-" + body.token_hash, refresh_token: "rt" }); }
     return new Response("unexpected " + method + " " + path, { status: 500 });
   });
-  return { fetch, codes, meta, get verified() { return verified; } };
+  return { fetch, codes, profiles, meta, get verified() { return verified; } };
 }
 
 describe("sign-in codes", () => {
   const env = { ...baseEnv, SUPABASE_SECRET_KEY: "secret-key-for-tests" } as any;
   const req = (email: string) => new Request("https://bookkit.test/api/sign-in-code", { method: "POST", body: JSON.stringify({ email }) });
   const verify = (email: string, code: string) => worker.fetch(new Request("https://bookkit.test/api/sign-in-verify", { method: "POST", body: JSON.stringify({ email, code }) }), env);
-  const sendCode = async (fake: ReturnType<typeof fakeSupabase>) => {
+  const sendCode = async (fake: ReturnType<typeof fakeSupabase>, email = "Me@Example.com") => {
     const send = vi.fn().mockResolvedValue({});
     vi.stubGlobal("fetch", fake.fetch);
-    expect(await (await worker.fetch(req("Me@Example.com"), { ...env, EMAIL: { send } })).json()).toEqual({ ok: true });
+    expect(await (await worker.fetch(req(email), { ...env, EMAIL: { send } })).json()).toEqual({ ok: true });
     return send;
   };
 
@@ -133,12 +153,25 @@ describe("sign-in codes", () => {
     expect(fake.codes.size).toBe(0);
   });
 
+  it("provisions and emails a sign-in code when an invited collaborator or library owner has no profile yet", async () => {
+    const fake = fakeSupabase();
+    expect(fake.profiles.has("carly@example.com")).toBe(false);
+    const send = await sendCode(fake, "Carly@example.com");
+    expect(send).toHaveBeenCalledTimes(1);
+    const msg = send.mock.calls[0][0];
+    expect(msg).toMatchObject({ to: "carly@example.com", from: { email: "noreply@bookkit.net", name: "Bookkit" } });
+    expect(fake.codes.get("invitee")?.token_type).toBe("invite");
+    const code = msg.subject.replace(/\D/g, "");
+    const ok = await verify("carly@example.com", code);
+    expect(await ok.json()).toEqual({ access_token: "at-hash-invite", refresh_token: "rt" });
+  });
+
   it("emails a 6-digit code in two halves and a link with the same code, at most once a minute", async () => {
     const fake = fakeSupabase();
     const send = await sendCode(fake);
     const msg = send.mock.calls[0][0];
     const [, a, b] = msg.subject.match(/^Your Bookkit code: (\d{3}) (\d{3})$/);
-    expect(msg).toMatchObject({ to: "me@example.com", from: { email: "sign-in@bookkit.net", name: "Bookkit" } });
+    expect(msg).toMatchObject({ to: "me@example.com", from: { email: "noreply@bookkit.net", name: "Bookkit" } });
     expect(msg.html).toContain(`${a} ${b}`);
     expect(msg.text).toContain(`https://bookkit.test/sign-in?email=me%40example.com&code=${a}${b}`);
     expect(msg.text).not.toContain("87654321");

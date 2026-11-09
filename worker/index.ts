@@ -153,7 +153,7 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  });
  const sent=await env.EMAIL.send({
   to:email,
-  from:{email:'invitations@bookkit.net',name:'Bookkit'},
+  from:{email:'noreply@bookkit.net',name:'Bookkit'},
   replyTo:user?.email,
   subject:owning?`${inviter} set up ${title} for you on Bookkit`:`${inviter} invited you to “${title}” on Bookkit`,
   text:mail.text,html:mail.html,
@@ -162,10 +162,11 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
 }
 
 /**
- * "Email me a sign-in code" for existing accounts, sent by Bookkit. The
- * answer never reveals whether an account exists, no account is created, and
- * each account gets at most one code a minute. The email has the 6-digit
- * code and a link that carries the same code.
+ * "Email me a sign-in code" for existing accounts and invited collaborators or
+ * library owners, sent by Bookkit. The answer never reveals whether an account
+ * exists, unknown addresses never create an account, and each account gets at
+ * most one code a minute. The email has the 6-digit code and a link that
+ * carries the same code.
  */
 async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  if(request.method!=='POST')return json({error:'POST required'},405);
@@ -177,18 +178,35 @@ async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  const done=json({ok:true});
  const signal=AbortSignal.timeout(20000);
  const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
- const found:any=await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&email=eq.${encodeURIComponent(email)}`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
- const id=found?.[0]?.id;if(!id)return done;
- const user:any=await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{headers:admin,signal}).then(r=>r.ok?r.json():null).catch(()=>null);
- if(!user)return done;
- const last=Number(user.app_metadata?.bookkit_link_sent_at??0);
- if(Date.now()-last<60000)return done;
- await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{...user.app_metadata,bookkit_link_sent_at:Date.now()}}),signal});
- const res=await fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type:'magiclink',email,redirect_to:url.origin+'/'}),signal});
+ const enc=encodeURIComponent(email);
+ const found:any=await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&email=eq.${enc}`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ let id=found?.[0]?.id;
+ const generate=(type:string)=>fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type,email,redirect_to:url.origin+'/'}),signal});
+ let res:Response;
+ if(id){
+  const user:any=await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{headers:admin,signal}).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(!user)return done;
+  const last=Number(user.app_metadata?.bookkit_link_sent_at??0);
+  if(Date.now()-last<60000)return done;
+  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{...user.app_metadata,bookkit_link_sent_at:Date.now()}}),signal});
+  res=await generate('magiclink');
+  if(!res.ok)res=await generate('invite');
+ }else{
+  const hasRow=(table:string,col:string)=>fetch(`${env.SUPABASE_URL}/rest/v1/${table}?select=id&${col}=eq.${enc}&limit=1`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).then((rows:any)=>Array.isArray(rows)&&rows.length>0).catch(()=>false);
+  const invited=(await Promise.all([hasRow('libraries','owner_email'),hasRow('library_invitations','email'),hasRow('project_invitations','email')])).some(Boolean);
+  if(!invited)return done;
+  res=await generate('invite');
+  if(!res.ok)res=await generate('magiclink');
+ }
  const data:any=await res.json().catch(()=>null);
+ id=id??data?.id??data?.user?.id;
  const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
- if(!res.ok||typeof tokenHash!=='string')return done;
- const code=await issueCode(env,id,tokenHash,'magiclink',signal);
+ const tokenType=(data?.verification_type??data?.properties?.verification_type)==='invite'?'invite':'magiclink';
+ if(!res.ok||typeof id!=='string'||typeof tokenHash!=='string')return done;
+ if(!found?.[0]?.id){
+  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{bookkit_link_sent_at:Date.now()}}),signal}).catch(()=>null);
+ }
+ const code=await issueCode(env,id,tokenHash,tokenType,signal);
  const mail=bookkitEmail({
   origin:url.origin,
   preheader:`Your code is ${spacedCode(code)}. It expires in ${CODE_MINUTES} minutes.`,
@@ -200,7 +218,7 @@ async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  });
  await env.EMAIL.send({
   to:email,
-  from:{email:'sign-in@bookkit.net',name:'Bookkit'},
+  from:{email:'noreply@bookkit.net',name:'Bookkit'},
   subject:`Your Bookkit code: ${spacedCode(code)}`,
   text:mail.text,html:mail.html,
  }).catch(()=>null);

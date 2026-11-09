@@ -18,6 +18,7 @@ describe("library addresses", () => {
     expect(libraryUrl("carly", "/the-owl", at("bookkit.net"))).toBe("https://carly.bookkit.net/the-owl");
     expect(libraryUrl(null, "/", at("dom.bookkit.net"))).toBe("https://bookkit.net/");
     expect(libraryUrl("dom", "/x", at("localhost", "http:", "1420"))).toBe("http://dom.localhost:1420/x");
+    expect(libraryUrl("dom", "/x", at("127.0.0.1", "http:", "4173"))).toBe("http://dom.localhost:4173/x");
     expect(libraryUrl(null, "/", at("dom.localhost", "http:", "1420"))).toBe("http://localhost:1420/");
   });
   it("shares the session cookie across bookkit.net only", () => {

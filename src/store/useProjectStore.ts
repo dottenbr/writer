@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
 import { useAuthStore } from "./useAuthStore";
+import { useHomeStore } from "./useHomeStore";
 import type {
   Project,
   ProjectAct,
@@ -120,7 +121,7 @@ interface ProjectStore {
 
   // App state
   projects: Project[];
-  projectCatalog: Array<{id:string;name:string;role:ProjectRole;libraryId?:string|null}>;
+  projectCatalog: Array<{id:string;name:string;role:ProjectRole;libraryId?:string|null;bookkitSlug?:string}>;
   catalogStatus: "idle" | "loading" | "ready";
   currentProjectId: string | null;
   currentProjectRole: ProjectRole | null;
@@ -606,9 +607,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (previousProjectId) cancelScheduledProjectSyncs(previousProjectId);
 
       set({ catalogStatus: "loading" });
+      const existingCatalog = get().projectCatalog;
+      const knownBookkit = existingCatalog.find((p) => p.id === id)?.bookkitSlug != null;
       const [projectCatalog, project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([
-        sbListProjects(), readProject(id), getProjectRole(id), readLlmSettings(id), sbReadComments(id), readExportConfig(id), readInspirationItems(id), listProjectMembers(id),
+        sbListProjects(),
+        readProject(id, { isBookkit: knownBookkit }),
+        getProjectRole(id),
+        readLlmSettings(id),
+        knownBookkit ? Promise.resolve([] as Comment[]) : sbReadComments(id),
+        knownBookkit ? Promise.resolve(get().exportConfig) : readExportConfig(id),
+        readInspirationItems(id),
+        listProjectMembers(id),
       ]);
+      const isBookkit = Boolean(project.bookkitSlug);
 
       // Set up realtime
       const unsubscribe = subscribeToProject(id, {
@@ -659,7 +670,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         lastActiveChapterId: project.chapters[0]?.id ?? null,
       });
       set({ catalogStatus: "ready" });
-      await get().refreshProgress();
+      if (!isBookkit) await get().refreshProgress();
     } catch (err) {
       set({ catalogStatus: "ready" });
       console.error("[writer-store] switchProject FAILED:", err);
@@ -1381,14 +1392,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     // The book named in the address first, then the last one used, then the first.
     const fromUrl = bookIdForSlug(projectList, urlBookSlug());
+    if (!fromUrl && useHomeStore.getState().home && projectList.some((p) => p.bookkitSlug)) {
+      set({ projects: [], currentProjectId: null, dirty: false, syncStatus: "idle" });
+      return;
+    }
     const targetId = fromUrl ?? (cfg.lastProjectId && projectList.some((p) => p.id === cfg.lastProjectId)
       ? cfg.lastProjectId
       : projectList[0].id);
+    const catalogItem = projectList.find((p) => p.id === targetId);
+    const knownBookkit = Boolean(catalogItem?.bookkitSlug);
 
     try {
       const [project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([
-        readProject(targetId), getProjectRole(targetId), readLlmSettings(targetId), sbReadComments(targetId), readExportConfig(targetId), readInspirationItems(targetId), listProjectMembers(targetId),
+        readProject(targetId, { isBookkit: knownBookkit }),
+        catalogItem?.role ? Promise.resolve(catalogItem.role) : getProjectRole(targetId),
+        readLlmSettings(targetId),
+        knownBookkit ? Promise.resolve([] as Comment[]) : sbReadComments(targetId),
+        knownBookkit ? Promise.resolve(get().exportConfig) : readExportConfig(targetId),
+        readInspirationItems(targetId),
+        listProjectMembers(targetId),
       ]);
+      const isBookkit = Boolean(project.bookkitSlug);
 
       // Restore UI state from config
       const activeTab: TabId = cfg.lastActiveTab ?? "brief";
@@ -1436,7 +1460,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         dirtyChapterIds: [],
       });
       persistCurrentProjectLocally();
-      await get().refreshProgress();
+      if (!isBookkit) await get().refreshProgress();
     } catch (error) {
       console.error("Failed to load project:", error);
       const cached = readLocalProjectBundle(targetId);

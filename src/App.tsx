@@ -1,10 +1,11 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useRef, useState, lazy, Suspense } from "react";
 import { useProjectStore } from "./store/useProjectStore";
 import { useAuthStore } from "./store/useAuthStore";
-import { Layout } from "./components/Layout";
 import { LoginScreen } from "./components/LoginScreen";
 import { supabase } from "./lib/supabase-client";
 import { noteSignOutReason, signingOut } from "./lib/supabase-service";
+
+const Layout = lazy(() => import("./components/Layout").then((m) => ({ default: m.Layout })));
 
 export default function App() {
   const {
@@ -98,7 +99,9 @@ export default function App() {
 
   return (
     <div className="app-root">
-      <Layout />
+      <Suspense fallback={<div className="boot-screen" aria-busy="true"><span className="brand-mark">b</span></div>}>
+        <Layout />
+      </Suspense>
     </div>
   );
 }

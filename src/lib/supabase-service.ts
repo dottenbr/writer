@@ -366,12 +366,12 @@ function mapDbComment(row: any): Comment {
 // Projects
 // ────────────────────────────────────────────────────────────
 
-export async function listProjects(): Promise<Array<{ id: string; name: string; role: ProjectRole; libraryId: string | null }>> {
+export async function listProjects(): Promise<Array<{ id: string; name: string; role: ProjectRole; libraryId: string | null; bookkitSlug?: string }>> {
   const user = await getCurrentUser();
   if (!user) return [];
   // Every book this account can open: owned, shared directly, or through a library.
   const [{ data: projects }, { data: memberships }, { data: libraries }] = await Promise.all([
-    supabase.from("projects").select("id, name, owner_id, library_id, private").order("name"),
+    supabase.from("projects").select("id, name, owner_id, library_id, private, bookkit_slug").order("name"),
     supabase.from("project_members").select("project_id, role").eq("user_id", user.id).not("accepted_at", "is", null),
     supabase.rpc("bookkit_libraries"),
   ]);
@@ -381,11 +381,23 @@ export async function listProjects(): Promise<Array<{ id: string; name: string; 
     const fromLibrary = p.library_id && !p.private ? libraryRole.get(p.library_id) : undefined;
     const role: ProjectRole = p.owner_id === user.id ? "owner"
       : memberRole.get(p.id) ?? (fromLibrary === "owner" || fromLibrary === "coauthor" ? "coauthor" : fromLibrary === "editor" ? "editor" : "viewer");
-    return { id: p.id, name: p.name, role, libraryId: p.library_id ?? null };
+    return { id: p.id, name: p.name, role, libraryId: p.library_id ?? null, bookkitSlug: p.bookkit_slug ?? undefined };
   });
 }
 
-export async function readProject(projectId: string): Promise<Project> {
+export async function readProject(projectId: string, options?: { isBookkit?: boolean }): Promise<Project> {
+  if (options?.isBookkit) {
+    const { data: proj, error: projErr } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (projErr || !proj) throw new Error(`Project not found: ${projectId}`);
+    const project = createDefaultProject(proj.name);
+    project.id = proj.id;
+    project.name = proj.name;
+    project.bookkitSlug = proj.bookkit_slug ?? undefined;
+    project.createdAt = proj.created_at;
+    project.brief = mapDbBrief(proj);
+    project.generalNotes = proj.general_notes ?? "";
+    return project;
+  }
   const [
     { data: proj, error: projErr },
     { data: acts },

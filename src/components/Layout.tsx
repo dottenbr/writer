@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import type { TabId } from "../types";
-import { Studio } from "./studio/Studio";
 import { useHomeStore } from "../store/useHomeStore";
 import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../lib/library-host";
-import { Workspace } from "./Workspace";
 
+const Studio = lazy(() => import("./studio/Studio").then((mod) => ({ default: mod.Studio })));
+const Workspace = lazy(() => import("./Workspace").then((mod) => ({ default: mod.Workspace })));
 const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
 const ChapterPlan = lazy(() => import("./ChapterPlan").then((mod) => ({ default: mod.ChapterPlan })));
 const Bible = lazy(() => import("./Bible").then((mod) => ({ default: mod.Bible })));
@@ -384,9 +384,10 @@ export function Layout() {
       <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
     </Suspense>
   );
-  if (catalogStatus === "ready" && home) return <>{<Workspace />}{modal}</>;
-  if (!currentProject && catalogStatus !== "ready") return <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
-  if (!currentProject) return <>{<Workspace />}{modal}</>;
-  if (currentProject.bookkitSlug) return <>{<Studio />}{modal}</>;
+  const fallback = <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
+  if (catalogStatus === "ready" && home) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
+  if (!currentProject && catalogStatus !== "ready") return fallback;
+  if (!currentProject) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
+  if (currentProject.bookkitSlug) return <Suspense fallback={fallback}><Studio />{modal}</Suspense>;
   return <LegacyLayout />;
 }

@@ -4,14 +4,7 @@ import { useAuthStore } from "../../store/useAuthStore";
 import { prefs, useBookStore, writePrefs, type View } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
 import { Navigator } from "./Navigator";
-import { ManuscriptView } from "./ManuscriptView";
-import { CompanionView } from "./CompanionView";
-import { ContextPanel } from "./ContextPanel";
 import { Toolbar } from "./Toolbar";
-import { BibleBoard, PlanBoard } from "./Boards";
-import { EntityIndex, EntityPage } from "./BiblePages";
-import { SceneBoard } from "./SceneBoard";
-import { TimelinePage } from "./TimelinePage";
 import { ListenBar } from "./ListenBar";
 import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
 import { useHomeStore } from "../../store/useHomeStore";
@@ -37,9 +30,18 @@ function lazyView<T>(load: () => Promise<T>) {
     throw error;
   }) as Promise<any>);
 }
+const ManuscriptView = lazyView(() => import("./ManuscriptView").then(m => ({ default: m.ManuscriptView })));
+const CompanionView = lazyView(() => import("./CompanionView").then(m => ({ default: m.CompanionView })));
+const ContextPanel = lazyView(() => import("./ContextPanel").then(m => ({ default: m.ContextPanel })));
+const BibleBoard = lazyView(() => import("./Boards").then(m => ({ default: m.BibleBoard })));
+const PlanBoard = lazyView(() => import("./Boards").then(m => ({ default: m.PlanBoard })));
+const EntityIndex = lazyView(() => import("./BiblePages").then(m => ({ default: m.EntityIndex })));
+const EntityPage = lazyView(() => import("./BiblePages").then(m => ({ default: m.EntityPage })));
+const SceneBoard = lazyView(() => import("./SceneBoard").then(m => ({ default: m.SceneBoard })));
+const TimelinePage = lazyView(() => import("./TimelinePage").then(m => ({ default: m.TimelinePage })));
 const BookSettings = lazyView(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
 const Inspiration = lazyView(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
-import { BriefPage } from "./BriefPage";
+const BriefPage = lazyView(() => import("./BriefPage").then(m => ({ default: m.BriefPage })));
 
 export function useTheme() {
   const [theme, setTheme] = useState<"light" | "dark">(() => prefs().theme ?? (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
@@ -666,13 +668,21 @@ export function Studio() {
           {isDoc && <Toolbar />}
           <div className="main-scroll">
             <ErrorBoundary resetKey={`${view}:${location.path}:${location.nonce}`}>
-              {content}
-              {view === "inspiration" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><div className="inspiration-host"><Inspiration /></div></Suspense>}
-              {view === "settings" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><BookSettings /></Suspense>}
+              <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}>
+                {content}
+                {view === "inspiration" && <div className="inspiration-host"><Inspiration /></div>}
+                {view === "settings" && <BookSettings />}
+              </Suspense>
             </ErrorBoundary>
           </div>
         </main>
-        {showPanel && panelOpen && <ErrorBoundary resetKey={location.path}><ContextPanel /></ErrorBoundary>}
+        {showPanel && panelOpen && (
+          <ErrorBoundary resetKey={location.path}>
+            <Suspense fallback={null}>
+              <ContextPanel />
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </div>
       {focusMode && <button className="focus-exit" onClick={() => setFocusMode(false)}>Exit focus · Esc</button>}
       {palette && <CommandPalette onClose={() => setPalette(false)} />}

@@ -16,7 +16,8 @@ export function hostLibrary(where: Where = here()): string | null {
 
 /** The address of a library (or of bookkit.net when slug is null), with a path. */
 export function libraryUrl(slug: string | null, path = "/", where: Where = here()): string {
-  const local = where.hostname === "localhost" || where.hostname.endsWith(".localhost");
+  const h = where.hostname.toLowerCase();
+  const local = h === "localhost" || h === "127.0.0.1" || h.endsWith(".localhost");
   const host = local ? `${slug ? slug + "." : ""}localhost${where.port ? ":" + where.port : ""}` : `${slug ? slug + "." : ""}${ROOT_DOMAIN}`;
   return `${local ? where.protocol : "https:"}//${host}${path}`;
 }

@@ -7,6 +7,7 @@ import { useAccess, useEntityMatcher } from "./common";
 import { useBookStore } from "../../store/useBookStore";
 import { joinDocument, markdownToHtml, splitDocument } from "../../lib/markdown-doc";
 import { slugify as slug } from "../../lib/book-model";
+import { parseScenes } from "../../lib/scene-cards";
 
 interface Props {
   path: string;
@@ -18,10 +19,12 @@ interface Props {
   find?: string;
   anchor?: string;
   onSession?: (session: DocSession) => void;
+  /** The chapter's scene-card file: its cards appear at the top of each scene. */
+  scenesPath?: string;
 }
 
 /** One live document: loads, edits, autosaves and links. */
-export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initialPoint, find, anchor, onSession }: Props) {
+export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initialPoint, find, anchor, onSession, scenesPath }: Props) {
   const { projectId, userId, canEdit, suggesting } = useAccess();
   const session = useDocSession(path, { projectId, userId, editable: writable && canEdit, suggesting });
   const matcher = useEntityMatcher();
@@ -31,6 +34,8 @@ export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initial
   const setBusSession = useEditorBus(s => s.setSession);
   const setSelection = useEditorBus(s => s.setSelection);
   const activeThread = useBookStore(s => s.activeThread);
+  const scenesFile = useBookStore(s => (scenesPath ? s.files.find(f => f.path === scenesPath)?.content : undefined));
+  const sceneCount = useMemo(() => (scenesFile ? parseScenes(scenesFile).length : 0), [scenesFile]);
   const editorRef = useRef<Editor | null>(null);
   const textRef = useRef(session.text);
   textRef.current = session.text;
@@ -100,6 +105,7 @@ export function ActiveDoc({ path, writable, chapterAnchors, placeholder, initial
       editable={writable && canEdit && session.state !== "loading"}
       placeholder={placeholder ?? (suggesting ? "Suggest text…" : "Start writing…")}
       links={links}
+      scenes={scenesPath && sceneCount ? { path: scenesPath, count: sceneCount } : undefined}
       initialPoint={initialPoint}
       onReady={editor => { editorRef.current = editor; setBusEditor(editor); }}
       onSelection={setSelection}

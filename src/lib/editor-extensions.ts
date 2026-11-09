@@ -154,6 +154,7 @@ export function bookExtensions(placeholder: string) {
     SceneBreak,
     LineBreak,
     RawBlock,
+    SceneSlots,
     Link.configure({ openOnClick: false, autolink: false, HTMLAttributes: { rel: "noopener noreferrer", target: null } }),
     Typography.configure({
       oneHalf: false, oneQuarter: false, threeQuarters: false, plusMinus: false, notEqual: false,
@@ -164,3 +165,61 @@ export function bookExtensions(placeholder: string) {
     BookLinks,
   ];
 }
+
+// ---------- scene cards at the top of each scene ----------
+
+export interface SceneSlotConfig {
+  /** How many cards there are; slot i sits at the start of scene i. */
+  count: number;
+  /** Mount a card into a slot; returns how to unmount it. */
+  render: ((index: number, el: HTMLElement) => () => void) | null;
+}
+export const sceneSlotsKey = new PluginKey<DecorationSet>("sceneSlots");
+
+/** Where each scene starts: the top of the text, and just after every scene break. */
+export function sceneStarts(doc: PMNode): number[] {
+  const starts = [0];
+  doc.forEach((node, offset) => { if (node.type.name === "horizontalRule") starts.push(offset + node.nodeSize); });
+  return starts;
+}
+
+function buildSlots(doc: PMNode, config: SceneSlotConfig): DecorationSet {
+  if (!config.render || config.count <= 0) return DecorationSet.empty;
+  const starts = sceneStarts(doc);
+  const decorations: Decoration[] = [];
+  for (let i = 0; i < config.count; i++) {
+    // more cards than scenes: the rest wait at the end of the chapter
+    const pos = i < starts.length ? starts[i] : doc.content.size;
+    const render = config.render;
+    decorations.push(Decoration.widget(pos, () => {
+      const el = document.createElement("div");
+      el.className = "scene-slot";
+      el.contentEditable = "false";
+      (el as HTMLElement & { _unmount?: () => void })._unmount = render(i, el);
+      return el;
+    }, {
+      key: `scene-slot-${i}`,
+      side: -1,
+      ignoreSelection: true,
+      stopEvent: () => true,
+      destroy: node => { (node as HTMLElement & { _unmount?: () => void })._unmount?.(); },
+    }));
+  }
+  return DecorationSet.create(doc, decorations);
+}
+
+export const SceneSlots = Extension.create<{}, { config: SceneSlotConfig }>({
+  name: "sceneSlots",
+  addStorage() { return { config: { count: 0, render: null } }; },
+  addProseMirrorPlugins() {
+    const storage = this.storage;
+    return [new Plugin<DecorationSet>({
+      key: sceneSlotsKey,
+      state: {
+        init: (_, state) => buildSlots(state.doc, storage.config),
+        apply: (tr, old, _o, state) => (tr.docChanged || tr.getMeta(sceneSlotsKey) ? buildSlots(state.doc, storage.config) : old.map(tr.mapping, tr.doc)),
+      },
+      props: { decorations: state => sceneSlotsKey.getState(state) },
+    })];
+  },
+});

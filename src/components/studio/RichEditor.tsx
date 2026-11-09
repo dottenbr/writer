@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import { bookExtensions, bookLinksKey, type LinkConfig } from "../../lib/editor-extensions";
+import { createRoot } from "react-dom/client";
+import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig } from "../../lib/editor-extensions";
+import { SceneCardInline } from "./SceneCardInline";
 import { docToMarkdown, markdownToHtml, nodeToMarkdown, type JSONNode } from "../../lib/markdown-doc";
+import { useBookStore } from "../../store/useBookStore";
+import { parseScenes } from "../../lib/scene-cards";
 
 export interface RichEditorHandle {
   editor: Editor | null;
@@ -20,10 +24,12 @@ interface Props {
   /** Click position to place the caret at after mounting. */
   initialPoint?: { x: number; y: number } | null;
   className?: string;
+  /** Show this scene-card file's cards at the top of each scene. */
+  scenes?: { path: string; count: number };
 }
 
 /** A Google-Docs-like surface for one Markdown body. Writes back Markdown with untouched blocks preserved. */
-export function RichEditor({ body, reloadKey, editable, placeholder, links, onChange, onReady, onSelection, initialPoint, className }: Props) {
+export function RichEditor({ body, reloadKey, editable, placeholder, links, onChange, onReady, onSelection, initialPoint, className, scenes }: Props) {
   const original = useRef<{ canonical: string[]; blocks: string[]; prefix: string } | null>(null);
   const loading = useRef(false);
   const onChangeRef = useRef(onChange);
@@ -73,6 +79,16 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
     editor.setEditable(editable);
     editor.view.dom.setAttribute("spellcheck", editable ? "true" : "false");
   }, [editor, editable]);
+
+  useEffect(() => {
+    if (!editor) return;
+    const path = scenes?.path;
+    editor.storage.sceneSlots.config = {
+      count: scenes?.count ?? 0,
+      render: path ? (index: number, el: HTMLElement) => { const root = createRoot(el); root.render(<SceneCardInline path={path} index={index} />); return () => setTimeout(() => root.unmount(), 0); } : null,
+    };
+    editor.view.dispatch(editor.state.tr.setMeta(sceneSlotsKey, true));
+  }, [editor, scenes?.path, scenes?.count]);
 
   useEffect(() => {
     if (!editor) return;
@@ -132,17 +148,30 @@ function linkEntities(html: string, matcher?: { regex: RegExp | null; byAlias: M
 }
 
 /** Static rendering identical to the editor's, for chapters not being edited. */
-export function StaticProse({ body, className, onActivate, matcher }: { body: string; className?: string; onActivate?: (point: { x: number; y: number }) => void; matcher?: Parameters<typeof linkEntities>[1] }) {
+export function StaticProse({ body, className, onActivate, matcher, scenesPath }: { body: string; className?: string; onActivate?: (point: { x: number; y: number }) => void; matcher?: Parameters<typeof linkEntities>[1]; scenesPath?: string }) {
   const html = useMemo(() => linkEntities(markdownToHtml(body).html.replace(/<div data-raw-md="([^"]*)"><\/div>/g, (_, src) => `<pre class="raw-md">${src}</pre>`), matcher), [body, matcher]);
+  const scenesFile = useBookStore(s => (scenesPath ? s.files.find(f => f.path === scenesPath)?.content : undefined));
+  const count = useMemo(() => (scenesFile ? parseScenes(scenesFile).length : 0), [scenesFile]);
+  const activate = (e: React.MouseEvent) => {
+    if (window.getSelection()?.toString()) return;
+    if ((e.target as HTMLElement).closest("[data-entity],a,.scene-inline")) return;
+    onActivate?.({ x: e.clientX, y: e.clientY });
+  };
+  if (!scenesPath || !count) return <div className={`doc-prose static ${className ?? ""}`} onMouseUp={activate} dangerouslySetInnerHTML={{ __html: html }} />;
+  // Scenes are the stretches between scene breaks; each gets its card on top.
+  const parts = html.split(/(<hr[^>]*>)/);
+  const scenes: string[] = [""];
+  for (const part of parts) { if (/^<hr/.test(part)) scenes.push(part); else scenes[scenes.length - 1] += part; }
   return (
-    <div
-      className={`doc-prose static ${className ?? ""}`}
-      onMouseUp={e => {
-        if (window.getSelection()?.toString()) return;
-        if ((e.target as HTMLElement).closest("[data-entity],a")) return;
-        onActivate?.({ x: e.clientX, y: e.clientY });
-      }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className={`doc-prose static ${className ?? ""}`} onMouseUp={activate}>
+      {scenes.map((chunk, i) => (
+        <div key={i} className="static-scene">
+          {i > 0 && <hr />}
+          {i < count && <SceneCardInline path={scenesPath} index={i} />}
+          <div dangerouslySetInnerHTML={{ __html: i > 0 ? chunk.replace(/^<hr[^>]*>/, "") : chunk }} />
+        </div>
+      ))}
+      {Array.from({ length: Math.max(0, count - scenes.length) }, (_, k) => <SceneCardInline key={`extra-${k}`} path={scenesPath} index={scenes.length + k} />)}
+    </div>
   );
 }

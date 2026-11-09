@@ -15,6 +15,7 @@ import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } f
 import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
 import { BOOK_FORMS, formMeta, type BookForm } from "../../lib/book-config";
 import { saveBookDocument, createBook, setAccountPassword } from "../../lib/supabase-service";
+import { navigatePublic } from "../../lib/public-routes";
 
 /**
  * Lazy views. After a new release the old chunk files are gone, so a tab that
@@ -138,7 +139,9 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
           const id = await createBook(title.trim(), author.trim(), { libraryId: library?.id ?? null, shelfId: shelfId || null, form });
           await refreshCatalog();
           const path = "/" + bookSlug(useProjectStore.getState().projectCatalog, id);
-          if ((library?.slug ?? null) !== hostLibrary()) { window.location.href = libraryUrl(library?.slug ?? null, path); return; }
+          const activeHost = hostLibrary();
+          if (activeHost && (library?.slug ?? null) !== activeHost) { window.location.href = libraryUrl(library?.slug ?? null, path); return; }
+          if (!activeHost && library?.slug) useLibraryStore.getState().selectLibrary(library.slug);
           window.history.pushState(null, "", path);
           useHomeStore.getState().setHome(false);
           await switchProject(id);
@@ -539,6 +542,7 @@ export function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setThem
           <button className="menu-item" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} size={15} /> {theme === "dark" ? "Light" : "Dark"} appearance</button>
           <button className="menu-item" onClick={() => { setOpen(false); useBookStore.getState().setView("settings"); }}><Icon name="users" size={15} /> Book settings & sharing</button>
           <button className="menu-item" onClick={() => { setOpen(false); setShowApiSettings(true); }}><Icon name="sparkle" size={15} /> AI assistant</button>
+          <button className="menu-item" onClick={() => { setOpen(false); navigatePublic("/docs"); }}><Icon name="book" size={15} /> Documentation</button>
           <button className="menu-item" onClick={() => { setOpen(false); setPassword(true); }}><Icon name="gear" size={15} /> Set password</button>
           <div className="menu-sep" />
           <button className="menu-item" onClick={() => void signOut()}><Icon name="logout" size={15} /> Sign out</button>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { useHomeStore } from "../store/useHomeStore";
-import { createLibrary, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook } from "../lib/supabase-service";
+import { createLibraryWithShelves, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook } from "../lib/supabase-service";
 import { generateAndCacheCoverThumbnail, inverseTextColorForTone, readCachedCover, type CachedCoverArt } from "../lib/cover-art";
 import { useLibraryStore, canWriteIn } from "../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../lib/library-host";
@@ -10,6 +10,7 @@ import { LibrarySettings } from "./LibrarySettings";
 import { bookSlug, navFlags, openInNewTab } from "../lib/book-url";
 import { NewBookDialog, UserMenu, useTheme } from "./studio/Studio";
 import { formatWords, Icon } from "./studio/common";
+import { navigatePublic } from "../lib/public-routes";
 
 const DAY = 86400000;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -182,6 +183,7 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   const target = book.target_words || 0;
   const pct = target ? Math.min(100, Math.round((book.author_words / target) * 100)) : 0;
   const chapters = book.chapters_total || 0;
+  const formLabel = book.form_label ?? "Novel";
   const week = book.activity.filter(a => Date.parse(a.day) > Date.now() - 7 * DAY);
   const weekWords = week.reduce((n, a) => n + a.added, 0);
   const weekTalk = week.reduce((n, a) => n + a.comments + a.suggestions, 0);
@@ -190,26 +192,33 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
     <button className={`ws-book ${featured ? "featured" : ""}`} onClick={onOpen}>
       <div className="ws-book-top">
         <BookCover book={book} />
-        <div className="ws-book-head">
-          <div className="ws-book-title">{book.name}</div>
-          <div className="ws-book-meta">
-            {library ? <span>{library.name}</span> : book.role !== "owner" ? <>{book.owner_name ? `${book.owner_name}’s book` : "Shared"}</> : "Your book"}
-            {book.role !== "owner" && <span className="ws-role">{book.role === "viewer" ? "reader" : book.role}</span>}
-            {book.private && <span className="ws-role">private</span>}
-            {!book.is_bookkit && <span className="ws-role">classic</span>}
+        <div className="ws-book-body">
+          <div className="ws-book-head-row">
+            <div className="ws-book-head">
+              <div className="ws-book-title-row">
+                <span className="ws-book-title">{book.name}</span>
+                <span className="ws-book-form">{formLabel}</span>
+              </div>
+              <div className="ws-book-meta">
+                {library ? <span>{library.name}</span> : book.role !== "owner" ? <>{book.owner_name ? `${book.owner_name}’s book` : "Shared"}</> : "Your book"}
+                {book.role !== "owner" && <span className="ws-role">{book.role === "viewer" ? "reader" : book.role}</span>}
+                {book.private && <span className="ws-role">private</span>}
+                {!book.is_bookkit && <span className="ws-role">classic</span>}
+              </div>
+            </div>
+            {featured && <span className="btn btn-primary btn-sm ws-continue"><Icon name="pen" size={13} /> Continue</span>}
           </div>
-        </div>
-        {featured && <span className="btn btn-primary btn-sm ws-continue"><Icon name="pen" size={13} /> Continue</span>}
-      </div>
-      <div className="ws-progress">
-        <div className="ws-progress-row">
-          <span><strong>{formatWords(book.author_words)}</strong> words written{target ? <span className="muted"> of {formatWords(target)}</span> : null}</span>
-          {target > 0 && <span className="muted">{pct}%</span>}
-        </div>
-        <div className="ws-progress-bar"><span style={{ width: `${pct}%` }} /></div>
-        <div className="ws-progress-row small muted">
-          <span>{chapters ? `${book.chapters_written} of ${chapters} chapters` : "No chapters yet"}</span>
-          {book.draft_words > 0 && <span>{formatWords(book.draft_words)} in the reference draft</span>}
+          <div className="ws-progress">
+            <div className="ws-progress-row">
+              <span><strong>{formatWords(book.author_words)}</strong> words written{target ? <span className="muted"> of {formatWords(target)}</span> : null}</span>
+              {target > 0 && <span className="muted">{pct}%</span>}
+            </div>
+            <div className="ws-progress-bar"><span style={{ width: `${pct}%` }} /></div>
+            <div className="ws-progress-row small muted">
+              <span>{chapters ? `${book.chapters_written} of ${chapters} chapters` : "No chapters yet"}</span>
+              {book.draft_words > 0 && <span>{formatWords(book.draft_words)} in the reference draft</span>}
+            </div>
+          </div>
         </div>
       </div>
       <div className="ws-book-foot">
@@ -270,6 +279,7 @@ function Overview({ books }: { books: WorkspaceBook[] }) {
 /** Jump between libraries. */
 function LibrarySwitcher({ current }: { current: Library | null | undefined }) {
   const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -285,15 +295,49 @@ function LibrarySwitcher({ current }: { current: Library | null | undefined }) {
       </button>
       {open && (
         <div className="menu book-menu">
-          <a className={`menu-item ${current === null ? "current" : ""}`} href={libraryUrl(null)}><Icon name="grid" size={15} /> <span className="menu-item-text">All libraries</span></a>
+          <a
+            className={`menu-item ${current === null ? "current" : ""}`}
+            href={libraryUrl(null)}
+            onClick={(e) => {
+              if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                e.preventDefault();
+                selectLibrary(null);
+                setOpen(false);
+              }
+            }}
+          >
+            <Icon name="grid" size={15} /> <span className="menu-item-text">All libraries</span>
+          </a>
           <div className="menu-sep" />
           <div className="menu-label">Libraries</div>
           {libraries.map(l => (
-            <a key={l.id} className={`menu-item ${current?.id === l.id ? "current" : ""}`} href={libraryUrl(l.slug)}>
+            <a
+              key={l.id}
+              className={`menu-item ${current?.id === l.id ? "current" : ""}`}
+              href={libraryUrl(l.slug)}
+              onClick={(e) => {
+                if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                  e.preventDefault();
+                  selectLibrary(l.slug);
+                  setOpen(false);
+                }
+              }}
+            >
               <Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span>
               <span className="menu-meta host">{l.slug}.bookkit.net</span>
             </a>
           ))}
+          <div className="menu-sep" />
+          <button
+            data-no-tab
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              navigatePublic("/signup");
+            }}
+          >
+            <Icon name="plus" size={15} /> <span className="menu-item-text">New library &amp; shelves…</span>
+          </button>
         </div>
       )}
     </div>
@@ -302,14 +346,39 @@ function LibrarySwitcher({ current }: { current: Library | null | undefined }) {
 
 function TopBar({ current, children }: { current: Library | null | undefined; children?: React.ReactNode }) {
   const [theme, setTheme] = useTheme();
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   return (
     <header className="topbar ws-topbar">
       <div className="topbar-left">
-        <a className="brand brand-home" href={libraryUrl(null)} title="All libraries"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></a>
+        <a
+          className="brand brand-home"
+          href={libraryUrl(null)}
+          title="All libraries"
+          onClick={(e) => {
+            if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              selectLibrary(null);
+            }
+          }}
+        >
+          <span className="brand-mark">b</span><span className="brand-name">bookkit</span>
+        </a>
         <span className="topbar-slash">/</span>
         <LibrarySwitcher current={current} />
       </div>
       <div className="topbar-right">
+        <a
+          className="btn btn-sm btn-quiet"
+          href="/docs"
+          onClick={(e) => {
+            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              navigatePublic("/docs");
+            }
+          }}
+        >
+          <Icon name="book" size={14} /> <span className="hide-sm">Docs</span>
+        </a>
         {children}
         <UserMenu theme={theme} setTheme={setTheme} />
       </div>
@@ -324,15 +393,19 @@ function useOpenBook() {
   const switchProject = useProjectStore(s => s.switchProject);
   const setHome = useHomeStore(s => s.setHome);
   const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   return (b: WorkspaceBook) => {
     const slug = libraries.find(l => l.id === b.library_id)?.slug ?? null;
     const path = "/" + bookSlug(catalog, b.project_id);
+    const activeHost = hostLibrary();
     if (navFlags.openInNewTab) {
       navFlags.openInNewTab = false;
-      openInNewTab(slug !== hostLibrary() ? libraryUrl(slug, path) : path);
+      openInNewTab(activeHost && slug !== activeHost ? libraryUrl(slug, path) : path);
       return;
     }
-    if (slug !== hostLibrary()) { window.location.href = libraryUrl(slug, path); return; }
+    if (activeHost && slug !== activeHost) { window.location.href = libraryUrl(slug, path); return; }
+    if (!activeHost && slug !== selectedSlug) selectLibrary(slug);
     navFlags.openLastPlace = true;
     window.history.pushState(null, "", path);
     setHome(false);
@@ -462,12 +535,22 @@ function LibraryHome({ library }: { library: Library }) {
 }
 
 function LibraryCard({ library, books }: { library: Library; books: WorkspaceBook[] }) {
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   const days = useDays(books, 30);
   const max = Math.max(...days.map(d => d.score), 1);
   const last = books.map(b => b.last_worked_at).filter(Boolean).sort().pop() ?? null;
   const words = books.reduce((n, b) => n + b.author_words, 0);
   return (
-    <a className="ws-library" href={libraryUrl(library.slug)}>
+    <a
+      className="ws-library"
+      href={libraryUrl(library.slug)}
+      onClick={(e) => {
+        if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+          e.preventDefault();
+          selectLibrary(library.slug);
+        }
+      }}
+    >
       <div className="ws-library-head">
         <div>
           <div className="ws-library-name">{library.name}</div>
@@ -493,8 +576,12 @@ function LibraryCard({ library, books }: { library: Library; books: WorkspaceBoo
 }
 
 function NewLibraryDialog({ onClose }: { onClose: () => void }) {
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
+  const [shelvesText, setShelvesText] = useState("Fiction, Nonfiction, Drafts & Ideas");
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -504,13 +591,35 @@ function NewLibraryDialog({ onClose }: { onClose: () => void }) {
     <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <form className="dialog" onSubmit={async e => {
         e.preventDefault(); setBusy(true); setError("");
-        try { await createLibrary(name, value); window.location.href = libraryUrl(value); } catch (err) { setError((err as Error).message); setBusy(false); }
+        try {
+          const initialShelves = shelvesText
+            .split(",")
+            .map(s => s.trim())
+            .filter(Boolean)
+            .map(shelfName => ({ name: shelfName }));
+          const created = await createLibraryWithShelves(name, value, description, initialShelves);
+          await reloadLibraries();
+          if (hostLibrary()) {
+            window.location.href = libraryUrl(created.slug);
+          } else {
+            selectLibrary(created.slug);
+            onClose();
+          }
+        } catch (err) { setError((err as Error).message); setBusy(false); }
       }}>
         <h2>New library</h2>
         <p className="dialog-sub">A library has its own address, its own shelves and its own people.</p>
         <label className="field">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Heidi’s Library" /></label>
         <label className="field">Address<div className="slug-field"><input value={value} onChange={e => { setTouched(true); setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); }} placeholder="heidi" /><span>.bookkit.net</span></div></label>
         {value && !LIBRARY_SLUG.test(value) && <div className="field-hint warn">Use lowercase letters, numbers and dashes.</div>}
+        <label className="field">Description (optional)<input value={description} onChange={e => setDescription(e.target.value)} placeholder="Novels, translations & essays" /></label>
+        <label className="field">Initial shelves (comma-separated)<input value={shelvesText} onChange={e => setShelvesText(e.target.value)} placeholder="Fiction, Nonfiction, Drafts & Ideas" /></label>
+        <div className="field-hint">
+          Want house styles &amp; a live preview?{" "}
+          <button type="button" className="link-btn inline" onClick={() => { onClose(); navigatePublic("/signup"); }}>
+            Open the full Library &amp; Shelves builder →
+          </button>
+        </div>
         {error && <div className="inline-error" role="alert">{error}</div>}
         <div className="dialog-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -589,10 +698,12 @@ function AllLibraries() {
 export function Workspace() {
   const libraries = useLibraryStore(s => s.libraries);
   const load = useLibraryStore(s => s.load);
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
   const current = useLibraryStore(s => s.current());
   useEffect(() => { if (!libraries) void load(); }, [libraries, load]);
   if (!libraries) return <div className="studio-message"><span className="spinner" /> Opening your library…</div>;
-  const slug = hostLibrary();
+  const slug = hostLibrary() ?? selectedSlug;
   if (!slug) return <AllLibraries />;
   if (!current) {
     return (
@@ -602,7 +713,18 @@ export function Workspace() {
           <section className="ws-empty">
             <h2>No library here</h2>
             <p>There’s no library at {slug}.bookkit.net that you can open. If someone invited you, sign in with the email they used.</p>
-            <a className="btn btn-primary" href={libraryUrl(null)}>See your libraries</a>
+            <a
+              className="btn btn-primary"
+              href={libraryUrl(null)}
+              onClick={(e) => {
+                if (!hostLibrary()) {
+                  e.preventDefault();
+                  selectLibrary(null);
+                }
+              }}
+            >
+              See your libraries
+            </a>
           </section>
         </main>
       </div>

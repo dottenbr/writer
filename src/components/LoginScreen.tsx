@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { requestSignInEmail } from "../lib/supabase-service";
 import { useAuthStore } from "../store/useAuthStore";
+import { navigatePublic } from "../lib/public-routes";
 
 const RESEND_SECONDS = 60;
 
@@ -73,7 +74,41 @@ export function LoginScreen() {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <div className="brand large"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></div>
+        <div className="login-card-top">
+          <a
+            href="/marketing"
+            className="brand large"
+            onClick={(e) => {
+              e.preventDefault();
+              navigatePublic("/marketing");
+            }}
+          >
+            <span className="brand-mark">b</span>
+            <span className="brand-name">bookkit</span>
+          </a>
+          <div className="login-top-links">
+            <a
+              href="/marketing"
+              className="login-link"
+              onClick={(e) => {
+                e.preventDefault();
+                navigatePublic("/marketing");
+              }}
+            >
+              Overview
+            </a>
+            <a
+              href="/docs"
+              className="login-link"
+              onClick={(e) => {
+                e.preventDefault();
+                navigatePublic("/docs");
+              }}
+            >
+              Docs
+            </a>
+          </div>
+        </div>
 
         {step === "password" ? (
           <>
@@ -142,6 +177,19 @@ export function LoginScreen() {
         )}
         {error && <p className="login-error" role="alert">{error}</p>}
         {note && step === "password" && <p className="login-note">Signed out {new Date(note.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: {note.reason}</p>}
+        <div className="login-signup-cta">
+          <span>New to Bookkit?</span>
+          <a
+            href="/signup"
+            className="login-link"
+            onClick={(e) => {
+              e.preventDefault();
+              navigatePublic("/signup");
+            }}
+          >
+            Claim your free library &amp; shelves ($0/mo) →
+          </a>
+        </div>
       </div>
     </div>
   );

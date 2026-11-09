@@ -5,6 +5,8 @@ import { LoginScreen } from "./components/LoginScreen";
 import { supabase } from "./lib/supabase-client";
 import { noteSignOutReason, signingOut } from "./lib/supabase-service";
 import { navFlags } from "./lib/book-url";
+import { hostLibrary } from "./lib/library-host";
+import { usePublicLocation } from "./lib/public-routes";
 
 const NAV_BUTTON_SELECTOR = [
   ".ws-book",
@@ -38,6 +40,9 @@ const NAV_BUTTON_SELECTOR = [
 ].join(", ");
 
 const Layout = lazy(() => import("./components/Layout").then((m) => ({ default: m.Layout })));
+const MarketingSite = lazy(() => import("./components/marketing/MarketingSite").then((m) => ({ default: m.MarketingSite })));
+const DocsSite = lazy(() => import("./components/docs/DocsSite").then((m) => ({ default: m.DocsSite })));
+const SignUpFlow = lazy(() => import("./components/marketing/SignUpFlow").then((m) => ({ default: m.SignUpFlow })));
 
 export default function App() {
   const {
@@ -46,6 +51,7 @@ export default function App() {
     dirty,
   } = useProjectStore();
   const { isAuthenticated, checkAuth } = useAuthStore();
+  const publicPage = usePublicLocation(isAuthenticated, !!hostLibrary());
   const didBootstrap = useRef(false);
   const didBootstrapLogin = useRef(false);
   const [checking, setChecking] = useState(true);
@@ -163,17 +169,43 @@ export default function App() {
     };
   }, []);
 
-  if (!isAuthenticated && checking) {
-    return <div className="boot-screen" aria-busy="true"><span className="brand-mark">b</span></div>;
+  const bootScreen = <div className="boot-screen" aria-busy="true"><span className="brand-mark">b</span></div>;
+
+  if (publicPage.kind === "docs") {
+    return (
+      <Suspense fallback={bootScreen}>
+        <DocsSite slug={publicPage.slug} />
+      </Suspense>
+    );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && checking) {
+    return bootScreen;
+  }
+
+  if (publicPage.kind === "signup") {
+    return (
+      <Suspense fallback={bootScreen}>
+        <SignUpFlow initialSlug={publicPage.initialSlug} />
+      </Suspense>
+    );
+  }
+
+  if (publicPage.kind === "marketing") {
+    return (
+      <Suspense fallback={bootScreen}>
+        <MarketingSite initialSection={publicPage.section} />
+      </Suspense>
+    );
+  }
+
+  if (publicPage.kind === "login" || !isAuthenticated) {
     return <LoginScreen />;
   }
 
   return (
     <div className="app-root">
-      <Suspense fallback={<div className="boot-screen" aria-busy="true"><span className="brand-mark">b</span></div>}>
+      <Suspense fallback={bootScreen}>
         <Layout />
       </Suspense>
     </div>

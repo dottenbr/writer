@@ -267,3 +267,74 @@ describe("www", () => {
     expect(res.headers.get("Location")).toBe("https://bookkit.net/the-owl/chapter/2?x=1");
   });
 });
+
+describe("free subscription signup (/api/signup)", () => {
+  const env = { ...baseEnv, SUPABASE_SECRET_KEY: "secret-key-for-tests" } as any;
+  const signupReq = (body: unknown) =>
+    new Request("https://bookkit.test/api/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("creates a confirmed user with free_early_access metadata and returns tokens", async () => {
+    const fetchMock = vi.fn(async (input: string, init: any = {}) => {
+      const url = new URL(input);
+      if (url.pathname === "/auth/v1/admin/users") {
+        const payload = JSON.parse(init.body);
+        expect(payload).toMatchObject({
+          email: "clara@example.com",
+          password: "very-secure-password",
+          email_confirm: true,
+        });
+        expect(payload.user_metadata).toMatchObject({
+          display_name: "Clara Vance",
+          subscription_plan: "free_early_access",
+          subscription_status: "active",
+        });
+        return Response.json({ id: "user-clara", email: "clara@example.com" });
+      }
+      if (url.pathname === "/auth/v1/token") {
+        return Response.json({
+          access_token: "at-clara",
+          refresh_token: "rt-clara",
+          user: { id: "user-clara", email: "clara@example.com" },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      signupReq({ email: "Clara@Example.com", password: "very-secure-password", displayName: "Clara Vance" }),
+      env
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toMatchObject({
+      access_token: "at-clara",
+      refresh_token: "rt-clara",
+      user: { id: "user-clara", email: "clara@example.com" },
+    });
+  });
+
+  it("rejects short passwords and duplicate email addresses", async () => {
+    const shortRes = await worker.fetch(
+      signupReq({ email: "clara@example.com", password: "short" }),
+      env
+    );
+    expect(shortRes.status).toBe(400);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify({ msg: "A user with this email address has already been registered" }), { status: 422 })
+      )
+    );
+    const dupRes = await worker.fetch(
+      signupReq({ email: "clara@example.com", password: "very-secure-password" }),
+      env
+    );
+    expect(dupRes.status).toBe(409);
+  });
+});

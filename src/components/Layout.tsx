@@ -368,10 +368,12 @@ function useLibraryAddress(home: boolean) {
   useEffect(() => { if (catalogStatus === "ready" && !libraries) void load(); }, [catalogStatus, libraries, load]);
   useEffect(() => {
     if (home || catalogStatus !== "ready" || !libraries || !currentId) return;
+    const activeHost = hostLibrary();
+    if (!activeHost) return;
     const book = catalog.find((p) => p.id === currentId);
     if (!book) return;
     const want = libraries.find((l) => l.id === book.libraryId)?.slug ?? null;
-    if (want !== hostLibrary()) window.location.replace(libraryUrl(want, window.location.pathname + window.location.hash));
+    if (want !== activeHost) window.location.replace(libraryUrl(want, window.location.pathname + window.location.hash));
   }, [home, catalogStatus, libraries, currentId, catalog]);
 }
 

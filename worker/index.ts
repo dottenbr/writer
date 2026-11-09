@@ -257,6 +257,46 @@ async function signInVerify(request:Request,env:Env,url:URL):Promise<Response>{
  return json({access_token:session.access_token,refresh_token:session.refresh_token});
 }
 
+/**
+ * Free subscription sign-up for Bookkit. Creates a confirmed user account with
+ * free early-access subscription metadata and returns a live Supabase session
+ * so the client can immediately create their Library and Shelves.
+ */
+async function signUpAccount(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ const body:any=await limitedBody(request).catch(()=>null);
+ const email=String(body?.email??'').trim().toLowerCase();
+ const password=String(body?.password??'');
+ const displayName=String(body?.displayName??'').trim().slice(0,80)||email.split('@')[0];
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'Enter a valid email address.'},400);
+ if(password.length<10||password.length>256)return json({error:'Use a password of at least 10 characters.'},400);
+ const signal=AbortSignal.timeout(20000);
+ const metadata={display_name:displayName,subscription_plan:'free_early_access',subscription_status:'active',subscribed_at:new Date().toISOString()};
+ if(env.SUPABASE_SECRET_KEY){
+  const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+  const created=await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`,{method:'POST',headers:admin,signal,body:JSON.stringify({email,password,email_confirm:true,user_metadata:metadata})});
+  if(!created.ok){
+   const err:any=await created.json().catch(()=>null);
+   const msg=String(err?.msg||err?.message||err?.error_description||'Could not create account.');
+   if(/already|registered|exists|duplicate/i.test(msg))return json({error:'An account with this email already exists. Sign in instead.'},409);
+   return json({error:msg},400);
+  }
+  const tokenRes=await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({email,password})});
+  const session:any=await tokenRes.json().catch(()=>null);
+  if(!tokenRes.ok||!session?.access_token||!session?.refresh_token)return json({error:'Account created. Please sign in with your email and password.'},201);
+  return json({access_token:session.access_token,refresh_token:session.refresh_token,user:session.user});
+ }
+ const pub=await fetch(`${env.SUPABASE_URL}/auth/v1/signup`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({email,password,data:metadata})});
+ const data:any=await pub.json().catch(()=>null);
+ if(!pub.ok){
+  const msg=String(data?.msg||data?.message||data?.error_description||'Could not create account.');
+  if(/already|registered|exists|duplicate/i.test(msg))return json({error:'An account with this email already exists. Sign in instead.'},409);
+  return json({error:msg},400);
+ }
+ return json({access_token:data?.access_token??data?.session?.access_token??null,refresh_token:data?.refresh_token??data?.session?.refresh_token??null,user:data?.user??null});
+}
+
 
 // ---------- voice: dictation and reading aloud (Workers AI) ----------
 
@@ -350,6 +390,7 @@ export default {async fetch(request:Request,env:Env,ctx?:{waitUntil:(p:Promise<u
  if(url.pathname==='/api/voice/transcribe')return transcribe(request,env,url).catch(()=>json({error:'Transcription failed. Try again.'},502));
  if(url.pathname==='/api/voice/speak')return speak(request,env,url,ctx).catch(()=>json({error:'Reading aloud failed. Try again.'},502));
  if(url.pathname==='/api/sign-in-verify')return signInVerify(request,env,url).catch(()=>json({error:'Could not sign in with that code. Try again.'},502));
+ if(url.pathname==='/api/signup')return signUpAccount(request,env,url).catch(()=>json({error:'Could not create your account. Try again.'},502));
  if(url.pathname==='/api/invite-link')return inviteLink(request,env,url).catch(()=>json({error:'Could not create a sign-in link. Try again.'},502));
  if(url.pathname!=='/api/ai')return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST required'},405);

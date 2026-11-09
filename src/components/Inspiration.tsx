@@ -1,26 +1,26 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { getInspirationUrl } from "../lib/supabase-service";
 import {
   applyCoverTags,
+  applyMoodLayout,
   clearCachedCover,
   coverToneFromTags,
   generateAndCacheCoverThumbnail,
   inverseTextColorForTone,
   isCoverTag,
+  parseMoodLayout,
   pickBookCoverItem,
   readCachedCover,
   visibleInspirationTags,
   type CoverTone,
+  type MoodItemLayout,
 } from "../lib/cover-art";
 import type { InspirationItem } from "../types";
 import { Icon } from "./studio/common";
 
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"]);
 const PDF_EXTENSIONS = new Set(["pdf"]);
-const DOCUMENT_EXTENSIONS = new Set(["pdf", "epub", "doc", "docx", "txt", "rtf", "odt", "mobi"]);
-
-type FileTypeFilter = "all" | "images" | "documents" | "other";
 
 function fileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
@@ -32,23 +32,6 @@ function isImage(fileName: string): boolean {
 
 function isPdf(fileName: string): boolean {
   return PDF_EXTENSIONS.has(fileExtension(fileName));
-}
-
-function fileTypeCategory(fileName: string): FileTypeFilter {
-  if (isImage(fileName)) return "images";
-  if (DOCUMENT_EXTENSIONS.has(fileExtension(fileName))) return "documents";
-  return "other";
-}
-
-function matchesSearch(item: InspirationItem, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return (
-    item.label.toLowerCase().includes(q) ||
-    item.fileName.toLowerCase().includes(q) ||
-    item.notes.toLowerCase().includes(q) ||
-    item.tags.some((t) => t.toLowerCase().includes(q))
-  );
 }
 
 function deduplicateFileName(name: string, existing: Set<string>): string {
@@ -79,52 +62,124 @@ function useThumbnail(projectId: string, item: InspirationItem) {
   return url;
 }
 
-function FileTypeBadge({ fileName }: { fileName: string }) {
+function FileTypeBadge({ fileName, label }: { fileName: string; label?: string }) {
   const ext = fileExtension(fileName).toUpperCase() || "FILE";
   return (
     <div className="insp-file-badge">
       <Icon name={isPdf(fileName) ? "book" : "file"} size={24} />
       <span>{ext}</span>
+      {label && <strong className="insp-file-badge-label">{label}</strong>}
     </div>
   );
 }
 
-function InspirationCard({
+const DEFAULT_WIDTHS = [290, 250, 320, 270, 300, 260];
+
+function computeDefaultLayouts(
+  items: InspirationItem[],
+  canvasWidth: number,
+  aspectById: Record<string, number>
+): Record<string, MoodItemLayout> {
+  const safeWidth = Math.max(360, canvasWidth || 1080);
+  const colTarget = safeWidth < 640 ? 1 : safeWidth < 960 ? 2 : safeWidth < 1320 ? 3 : 4;
+  const gap = 28;
+  const padX = 24;
+  const padY = 20;
+  const colWidth = Math.max(220, Math.floor((safeWidth - padX * 2 - gap * (colTarget - 1)) / colTarget));
+  const colHeights = new Array<number>(colTarget).fill(padY);
+  const result: Record<string, MoodItemLayout> = {};
+
+  items.forEach((item, index) => {
+    const saved = parseMoodLayout(item.tags);
+    if (saved) {
+      result[item.id] = saved;
+      // Advance the nearest column estimate so unsaved items flow below saved ones
+      const approxCol = Math.min(colTarget - 1, Math.max(0, Math.floor(saved.x / (colWidth + gap))));
+      const ratio = aspectById[item.id] ?? 0.78;
+      const estH = Math.round(saved.w * ratio) + gap;
+      colHeights[approxCol] = Math.max(colHeights[approxCol], saved.y + estH);
+      return;
+    }
+
+    // Pick shortest column
+    let shortestCol = 0;
+    for (let c = 1; c < colTarget; c++) {
+      if (colHeights[c] < colHeights[shortestCol]) shortestCol = c;
+    }
+
+    const presetW = DEFAULT_WIDTHS[index % DEFAULT_WIDTHS.length];
+    const w = colTarget === 1 ? Math.min(safeWidth - 32, 340) : Math.min(colWidth + 16, presetW);
+    const jitterX = colTarget > 1 ? ((index * 17) % 14) - 7 : 0;
+    const x = Math.max(12, padX + shortestCol * (colWidth + gap) + jitterX);
+    const y = Math.round(colHeights[shortestCol]);
+    const ratio = aspectById[item.id] ?? 0.78;
+    const estHeight = Math.round(w * ratio);
+
+    result[item.id] = {
+      x,
+      y,
+      w,
+      z: index + 1,
+    };
+    colHeights[shortestCol] += estHeight + gap;
+  });
+
+  return result;
+}
+
+function MoodBoardPiece({
   item,
+  layout,
   projectId,
   canEdit,
+  isSelected,
   isCover,
   isExplicitCover,
+  onSelect,
+  onBringToFront,
+  onCommitLayout,
   onSetCover,
   onDelete,
   onUpdate,
   onPreview,
   onAddTag,
   onRemoveTag,
+  onImageLoadAspect,
 }: {
   item: InspirationItem;
+  layout: MoodItemLayout;
   projectId: string;
   canEdit: boolean;
+  isSelected: boolean;
   isCover: boolean;
   isExplicitCover: boolean;
+  onSelect: (id: string | null) => void;
+  onBringToFront: (id: string) => number;
+  onCommitLayout: (item: InspirationItem, next: MoodItemLayout) => void;
   onSetCover: (item: InspirationItem) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string, updates: Partial<InspirationItem>) => void;
   onPreview: (item: InspirationItem) => void;
   onAddTag: (id: string, tag: string) => void;
   onRemoveTag: (id: string, tag: string) => void;
+  onImageLoadAspect: (id: string, ratio: number) => void;
 }) {
   const thumb = useThumbnail(projectId, item);
   const [tone, setTone] = useState<CoverTone>(() => {
     const cached = readCachedCover(projectId, item.fileName);
     return cached?.tone ?? coverToneFromTags(item.tags) ?? "dark";
   });
-  const [editingLabel, setEditingLabel] = useState(false);
+
+  const [livePos, setLivePos] = useState<{ x: number; y: number; w: number; z: number } | null>(null);
+  const [isInteracting, setIsInteracting] = useState(false);
+
   const [labelDraft, setLabelDraft] = useState(item.label);
-  const [showNotes, setShowNotes] = useState(Boolean(item.notes));
-  const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    setLabelDraft(item.label);
+  }, [item.label]);
 
   useEffect(() => {
     if (!isCover || !thumb) return;
@@ -139,152 +194,305 @@ function InspirationCard({
     };
   }, [isCover, thumb, projectId, item.fileName, item.tags]);
 
+  const effective = livePos ?? layout;
+  const userTags = visibleInspirationTags(item.tags);
+  const badgeColor = inverseTextColorForTone(tone);
+
+  const handlePiecePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    // Ignore pointer downs originating inside the edit popover or resize handle
+    const target = e.target as HTMLElement;
+    if (target.closest(".insp-popover") || target.closest(".insp-resize-handle")) return;
+
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origX = effective.x;
+    const origY = effective.y;
+    const origW = effective.w;
+    const nextZ = onBringToFront(item.id);
+    let moved = false;
+    let latest: MoodItemLayout = { x: origX, y: origY, w: origW, z: nextZ };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) > 4) {
+        moved = true;
+        setIsInteracting(true);
+      }
+      if (moved) {
+        latest = {
+          x: Math.max(0, Math.round(origX + dx)),
+          y: Math.max(0, Math.round(origY + dy)),
+          w: origW,
+          z: nextZ,
+        };
+        setLivePos(latest);
+      }
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      setIsInteracting(false);
+      if (moved) {
+        setLivePos(null);
+        onCommitLayout(item, latest);
+      } else {
+        onSelect(isSelected ? null : item.id);
+      }
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+  };
+
+  const handleResizePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const startX = e.clientX;
+    const origW = effective.w;
+    const origX = effective.x;
+    const origY = effective.y;
+    const nextZ = onBringToFront(item.id);
+    let latest: MoodItemLayout = { x: origX, y: origY, w: origW, z: nextZ };
+    setIsInteracting(true);
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const nextW = Math.max(140, Math.min(780, Math.round(origW + dx)));
+      latest = { x: origX, y: origY, w: nextW, z: nextZ };
+      setLivePos(latest);
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      setIsInteracting(false);
+      setLivePos(null);
+      onCommitLayout(item, latest);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+  };
+
+  const handleScaleChange = (nextWidth: number) => {
+    const clamped = Math.max(140, Math.min(780, Math.round(nextWidth)));
+    const nextLayout: MoodItemLayout = {
+      x: effective.x,
+      y: effective.y,
+      w: clamped,
+      z: effective.z,
+    };
+    onCommitLayout(item, nextLayout);
+  };
+
   const commitLabel = () => {
     const trimmed = labelDraft.trim();
     if (trimmed && trimmed !== item.label) {
       onUpdate(item.id, { label: trimmed });
     }
-    setEditingLabel(false);
   };
 
   const commitTag = () => {
-    if (tagDraft.trim()) onAddTag(item.id, tagDraft);
-    setTagDraft("");
-    setAddingTag(false);
+    const trimmed = tagDraft.trim();
+    if (trimmed) {
+      onAddTag(item.id, trimmed);
+      setTagDraft("");
+    }
   };
 
-  const userTags = visibleInspirationTags(item.tags);
-  const badgeColor = inverseTextColorForTone(tone);
-
   return (
-    <article className={`insp-studio-card ${isCover ? "is-cover-card" : ""}`}>
-      <button type="button" className="insp-studio-preview" onClick={() => onPreview(item)} aria-label={`Preview ${item.label}`}>
+    <div
+      className={`insp-mood-item ${isSelected ? "is-selected" : ""} ${isCover ? "is-cover-card" : ""} ${isInteracting ? "is-interacting" : ""}`}
+      style={{
+        transform: `translate3d(${effective.x}px, ${effective.y}px, 0)`,
+        width: `${effective.w}px`,
+        zIndex: isSelected ? Math.max(effective.z, 900) : effective.z,
+      }}
+      onPointerDown={handlePiecePointerDown}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest(".insp-popover")) return;
+        onPreview(item);
+      }}
+    >
+      <div className="insp-mood-frame">
         {thumb ? (
-          <img src={thumb} alt={item.label} className="insp-studio-img" loading="lazy" />
+          <img
+            src={thumb}
+            alt={item.label}
+            className="insp-mood-img"
+            draggable={false}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                onImageLoadAspect(item.id, img.naturalHeight / img.naturalWidth);
+              }
+            }}
+          />
         ) : (
-          <FileTypeBadge fileName={item.fileName} />
+          <FileTypeBadge fileName={item.fileName} label={item.label} />
         )}
+
         {isCover && (
-          <span
-            className="insp-cover-badge"
-            data-tone={tone}
-            style={{ color: badgeColor }}
-          >
+          <span className="insp-cover-badge" data-tone={tone} style={{ color: badgeColor }}>
             Cover
           </span>
         )}
-      </button>
-      <div className="insp-studio-body">
-        <div className="insp-studio-head">
-          {editingLabel && canEdit ? (
-            <input
-              className="insp-studio-title-input"
-              value={labelDraft}
-              aria-label="Item title"
-              onChange={(e) => setLabelDraft(e.target.value)}
-              onBlur={commitLabel}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitLabel();
-                if (e.key === "Escape") setEditingLabel(false);
-              }}
-              autoFocus
-            />
-          ) : (
-            <h3
-              className="insp-studio-title"
-              onClick={() => {
-                if (!canEdit) return;
-                setLabelDraft(item.label);
-                setEditingLabel(true);
-              }}
-              title={canEdit ? "Click to rename" : undefined}
-            >
-              {item.label}
-            </h3>
-          )}
-          <span className="insp-studio-filename">{item.fileName}</span>
-        </div>
 
-        <div className="insp-studio-tags">
-          {userTags.map((tag) => (
-            <span key={tag} className="chip insp-chip">
-              {tag}
-              {canEdit && (
-                <button
-                  type="button"
-                  className="insp-chip-remove"
-                  aria-label={`Remove tag ${tag}`}
-                  onClick={() => onRemoveTag(item.id, tag)}
-                >
-                  &times;
-                </button>
-              )}
-            </span>
-          ))}
-          {canEdit && (
-            addingTag ? (
+        <button
+          type="button"
+          className="insp-resize-handle"
+          aria-label={`Scale ${item.label}`}
+          title="Drag corner to scale"
+          onPointerDown={handleResizePointerDown}
+        />
+      </div>
+
+      {isSelected && (
+        <div
+          className="insp-popover"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="insp-popover-head">
+            {canEdit ? (
+              <input
+                className="insp-studio-title-input"
+                value={labelDraft}
+                aria-label="Picture title"
+                placeholder="Title or caption…"
+                onChange={(e) => setLabelDraft(e.target.value)}
+                onBlur={commitLabel}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    commitLabel();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            ) : (
+              <strong className="insp-popover-title">{item.label}</strong>
+            )}
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => onSelect(null)}
+              aria-label="Close inspector"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+
+          <div className="insp-popover-scale">
+            <span className="insp-popover-label">Size</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => handleScaleChange(effective.w - 40)}
+              aria-label="Smaller"
+            >
+              &minus;
+            </button>
+            <input
+              type="range"
+              min={140}
+              max={720}
+              step={10}
+              value={effective.w}
+              aria-label="Picture width"
+              onChange={(e) => handleScaleChange(Number(e.target.value))}
+            />
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => handleScaleChange(effective.w + 40)}
+              aria-label="Larger"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="insp-studio-tags">
+            {userTags.map((tag) => (
+              <span key={tag} className="chip insp-chip">
+                #{tag}
+                {canEdit && (
+                  <button
+                    type="button"
+                    className="insp-chip-remove"
+                    aria-label={`Remove tag ${tag}`}
+                    onClick={() => onRemoveTag(item.id, tag)}
+                  >
+                    &times;
+                  </button>
+                )}
+              </span>
+            ))}
+            {canEdit && (
               <input
                 className="insp-tag-inline-input"
-                placeholder="Tag name…"
+                placeholder="+ Add tag…"
                 value={tagDraft}
                 onChange={(e) => setTagDraft(e.target.value)}
                 onBlur={commitTag}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") commitTag();
-                  if (e.key === "Escape") { setTagDraft(""); setAddingTag(false); }
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitTag();
+                  }
                 }}
-                autoFocus
               />
-            ) : (
-              <button type="button" className="link-btn insp-add-tag-btn" onClick={() => setAddingTag(true)}>
-                + Tag
-              </button>
-            )
-          )}
-        </div>
+            )}
+          </div>
 
-        {showNotes && (
           <textarea
             className="insp-studio-notes"
-            placeholder="Why this matters to the book…"
+            placeholder="Notes or atmosphere for this piece…"
             value={item.notes}
             readOnly={!canEdit}
             onChange={(e) => onUpdate(item.id, { notes: e.target.value })}
             rows={2}
           />
-        )}
 
-        <div className="insp-studio-foot">
-          <div className="insp-studio-foot-left">
-            <button type="button" className="link-btn" onClick={() => setShowNotes(!showNotes)}>
-              {showNotes ? "Hide notes" : item.notes ? "Edit notes" : "+ Add notes"}
-            </button>
-            {canEdit && isImage(item.fileName) && (
-              <button
-                type="button"
-                className={`link-btn insp-cover-btn ${isExplicitCover ? "active" : ""}`}
-                onClick={() => onSetCover(item)}
-                title={isExplicitCover ? "Pinned as the shelf cover image" : "Use this image as the book cover on the library shelf"}
-              >
-                {isExplicitCover ? "Cover image ✓" : "Set as cover"}
+          <div className="insp-popover-foot">
+            <div className="insp-popover-actions">
+              {canEdit && isImage(item.fileName) && (
+                <button
+                  type="button"
+                  className={`btn btn-sm ${isExplicitCover ? "btn-primary" : ""}`}
+                  onClick={() => onSetCover(item)}
+                  title="Use this picture as the book cover on the library shelf"
+                >
+                  {isExplicitCover ? "Cover image ✓" : "Set as cover"}
+                </button>
+              )}
+              <button type="button" className="btn btn-sm" onClick={() => onPreview(item)}>
+                Full screen
               </button>
+            </div>
+            {canEdit && (
+              confirmDelete ? (
+                <span className="confirm-inline">
+                  <button type="button" className="btn btn-sm btn-danger" onClick={() => onDelete(item.id)}>
+                    Delete
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(false)}>
+                    Keep
+                  </button>
+                </span>
+              ) : (
+                <button type="button" className="link-btn danger" onClick={() => setConfirmDelete(true)}>
+                  Remove
+                </button>
+              )
             )}
           </div>
-          {canEdit && (
-            confirmDelete ? (
-              <span className="confirm-inline">
-                <button type="button" className="btn btn-sm btn-danger" onClick={() => onDelete(item.id)}>Remove</button>
-                <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Keep</button>
-              </span>
-            ) : (
-              <button type="button" className="link-btn danger" onClick={() => setConfirmDelete(true)}>
-                Remove
-              </button>
-            )
-          )}
         </div>
-      </div>
-    </article>
+      )}
+    </div>
   );
 }
 
@@ -342,7 +550,10 @@ function Lightbox({
         <header className="insp-lightbox-bar">
           <div>
             <strong>{item.label}</strong>
-            <span className="muted"> · {item.fileName} ({currentIndex + 1} of {items.length})</span>
+            <span className="muted">
+              {" "}
+              · {currentIndex + 1} of {items.length}
+            </span>
           </div>
           <div className="insp-lightbox-actions">
             {canEdit && isImage(item.fileName) && (
@@ -354,23 +565,38 @@ function Lightbox({
                 {isCurrentCover ? "Cover image ✓" : "Set as cover"}
               </button>
             )}
-            {hasPrev && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex - 1)}>Previous</button>}
-            {hasNext && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex + 1)}>Next</button>}
-            {url && <a className="btn btn-sm" href={url} target="_blank" rel="noopener noreferrer">Open original</a>}
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close preview"><Icon name="close" size={16} /></button>
+            {hasPrev && (
+              <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex - 1)}>
+                Previous
+              </button>
+            )}
+            {hasNext && (
+              <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex + 1)}>
+                Next
+              </button>
+            )}
+            {url && (
+              <a className="btn btn-sm" href={url} target="_blank" rel="noopener noreferrer">
+                Open original
+              </a>
+            )}
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close preview">
+              <Icon name="close" size={16} />
+            </button>
           </div>
         </header>
         <div className="insp-lightbox-stage">
           {!url ? (
-            <div className="studio-message"><span className="spinner" /> Loading preview…</div>
+            <div className="studio-message">
+              <span className="spinner" /> Loading preview…
+            </div>
           ) : isImage(item.fileName) ? (
             <img src={url} alt={item.label} className="insp-lightbox-img" />
           ) : isPdf(item.fileName) ? (
             <iframe src={url} title={item.label} className="insp-lightbox-pdf" />
           ) : (
             <div className="insp-lightbox-fallback">
-              <FileTypeBadge fileName={item.fileName} />
-              <p>{item.fileName}</p>
+              <FileTypeBadge fileName={item.fileName} label={item.label} />
             </div>
           )}
         </div>
@@ -388,29 +614,130 @@ export function Inspiration() {
   const updateInspirationItem = useProjectStore((s) => s.updateInspirationItem);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projectId = currentProjectId ?? "";
-  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
+  const canEdit =
+    currentProjectRole === "owner" ||
+    currentProjectRole === "coauthor" ||
+    currentProjectRole === "editor";
 
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [filterTag, setFilterTag] = useState<string | null>(null);
-  const [filterType, setFilterType] = useState<FileTypeFilter>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isDragging, setIsDragging] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [canvasWidth, setCanvasWidth] = useState<number>(1120);
+  const [aspectById, setAspectById] = useState<Record<string, number>>({});
+  const [localLayouts, setLocalLayouts] = useState<Record<string, MoodItemLayout>>({});
 
-  const allTags = Array.from(new Set(inspirationItems.flatMap((i) => visibleInspirationTags(i.tags)))).sort();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const zCounterRef = useRef<number>(40);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const updateWidth = () => {
+      if (el.clientWidth > 0) setCanvasWidth(el.clientWidth);
+    };
+    updateWidth();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(updateWidth);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedId) {
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
+
+  const allTags = Array.from(
+    new Set(inspirationItems.flatMap((i) => visibleInspirationTags(i.tags)))
+  ).sort();
   const activeCover = pickBookCoverItem(inspirationItems);
   const coverItemId = activeCover?.item.id ?? null;
 
-  const displayed = inspirationItems.filter((item) => {
-    if (filterTag && !item.tags.includes(filterTag)) return false;
-    if (filterType !== "all" && fileTypeCategory(item.fileName) !== filterType) return false;
-    if (searchQuery && !matchesSearch(item, searchQuery)) return false;
-    return true;
-  });
+  const displayed = useMemo(
+    () =>
+      inspirationItems.filter((item) => {
+        if (filterTag && !item.tags.includes(filterTag)) return false;
+        return true;
+      }),
+    [inspirationItems, filterTag]
+  );
+
+  const computedLayouts = useMemo(() => {
+    const defaults = computeDefaultLayouts(displayed, canvasWidth, aspectById);
+    const merged: Record<string, MoodItemLayout> = {};
+    for (const item of displayed) {
+      merged[item.id] = localLayouts[item.id] ?? parseMoodLayout(item.tags) ?? defaults[item.id];
+    }
+    return merged;
+  }, [displayed, canvasWidth, aspectById, localLayouts]);
+
+  const canvasHeight = useMemo(() => {
+    let maxBottom = 680;
+    for (const item of displayed) {
+      const l = computedLayouts[item.id];
+      if (!l) continue;
+      const ratio = aspectById[item.id] ?? 0.8;
+      const bottom = l.y + Math.round(l.w * ratio) + 220;
+      if (bottom > maxBottom) maxBottom = bottom;
+    }
+    return maxBottom;
+  }, [displayed, computedLayouts, aspectById]);
 
   const existingFileNames = new Set(inspirationItems.map((i) => i.fileName));
-  const hasActiveFilters = filterTag !== null || filterType !== "all" || searchQuery !== "";
+
+  const handleBringToFront = useCallback((id: string) => {
+    zCounterRef.current += 1;
+    const nextZ = zCounterRef.current;
+    setLocalLayouts((prev) => {
+      const cur = prev[id];
+      if (!cur) return prev;
+      return { ...prev, [id]: { ...cur, z: nextZ } };
+    });
+    return nextZ;
+  }, []);
+
+  const handleCommitLayout = useCallback(
+    (item: InspirationItem, next: MoodItemLayout) => {
+      setLocalLayouts((prev) => ({ ...prev, [item.id]: next }));
+      if (canEdit) {
+        updateInspirationItem(item.id, { tags: applyMoodLayout(item.tags, next) });
+      }
+    },
+    [canEdit, updateInspirationItem]
+  );
+
+  const handleArrangeNeatly = useCallback(() => {
+    const stripped = displayed.map((item) => ({
+      ...item,
+      tags: applyMoodLayout(item.tags, null),
+    }));
+    const fresh = computeDefaultLayouts(stripped, canvasWidth, aspectById);
+    setLocalLayouts(fresh);
+    if (canEdit) {
+      for (const item of displayed) {
+        const layout = fresh[item.id];
+        if (layout) {
+          updateInspirationItem(item.id, { tags: applyMoodLayout(item.tags, layout) });
+        }
+      }
+    }
+  }, [displayed, canvasWidth, aspectById, canEdit, updateInspirationItem]);
+
+  const handleImageLoadAspect = useCallback((id: string, ratio: number) => {
+    setAspectById((prev) => {
+      if (prev[id] && Math.abs(prev[id] - ratio) < 0.01) return prev;
+      return { ...prev, [id]: ratio };
+    });
+  }, []);
 
   const handleSetCover = useCallback(
     (item: InspirationItem) => {
@@ -470,7 +797,7 @@ export function Inspiration() {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      setIsDragging(false);
+      setIsDraggingFiles(false);
       if (canEdit && e.dataTransfer.files.length > 0) {
         void handleAddViaInput(e.dataTransfer.files);
       }
@@ -487,7 +814,7 @@ export function Inspiration() {
   );
 
   const handleAddTag = (itemId: string, tag: string) => {
-    const trimmed = tag.trim().toLowerCase();
+    const trimmed = tag.trim().toLowerCase().replace(/^#+/, "");
     if (!trimmed) return;
     const item = inspirationItems.find((i) => i.id === itemId);
     if (!item || item.tags.includes(trimmed)) return;
@@ -502,22 +829,43 @@ export function Inspiration() {
 
   return (
     <div
-      className={`board insp-board ${isDragging ? "dragging" : ""}`}
+      className={`board insp-board insp-mood-surface ${isDraggingFiles ? "dragging" : ""}`}
       onDragOver={(e) => {
         e.preventDefault();
-        if (canEdit) setIsDragging(true);
+        if (canEdit && e.dataTransfer.types.includes("Files")) setIsDraggingFiles(true);
       }}
-      onDragLeave={() => setIsDragging(false)}
+      onDragLeave={() => setIsDraggingFiles(false)}
       onDrop={handleDrop}
+      onPointerDown={() => {
+        if (selectedId) setSelectedId(null);
+      }}
     >
-      <header className="board-head">
-        <div>
-          <div className="board-eyebrow">Reference &amp; Mood Board</div>
-          <h1>Inspiration</h1>
-          <p className="board-sub">
-            Photographs, maps, clippings, and reference PDFs that belong to the world of this book.
-          </p>
+      <header className="insp-mood-header" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="insp-mood-header-left">
+          <h1 className="insp-mood-heading">Mood Board</h1>
+          {allTags.length > 0 && (
+            <div className="insp-mood-tags" role="group" aria-label="Filter by tag">
+              <button
+                type="button"
+                className={`chip ${filterTag === null ? "on" : ""}`}
+                onClick={() => setFilterTag(null)}
+              >
+                All
+              </button>
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className={`chip ${filterTag === tag ? "on" : ""}`}
+                  onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
         <div className="insp-head-actions">
           <input
             ref={fileInputRef}
@@ -532,127 +880,86 @@ export function Inspiration() {
               }
             }}
           />
+          {displayed.length > 1 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={handleArrangeNeatly}
+              title="Arrange pictures into a clean collage"
+            >
+              Arrange neatly
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-sm btn-primary"
               disabled={uploading}
               onClick={() => fileInputRef.current?.click()}
             >
-              <Icon name="plus" size={14} /> {uploading ? "Uploading…" : "Add files"}
+              <Icon name="plus" size={14} /> {uploading ? "Uploading…" : "Add pictures"}
             </button>
           )}
         </div>
       </header>
 
-      <div className="insp-controls">
-        <div className="insp-search-box">
-          <Icon name="search" size={14} />
-          <input
-            type="search"
-            placeholder="Filter by title, filename, tag, or notes…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label="Search inspiration files"
-          />
-          {searchQuery && (
-            <button type="button" className="icon-btn" onClick={() => setSearchQuery("")} aria-label="Clear search">
-              <Icon name="close" size={13} />
-            </button>
-          )}
-        </div>
-
-        <div className="segmented" role="group" aria-label="Filter by file type">
-          {(["all", "images", "documents", "other"] as FileTypeFilter[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              className={filterType === t ? "on" : ""}
-              onClick={() => setFilterType(t)}
-            >
-              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        <span className="muted insp-count">
-          {hasActiveFilters
-            ? `${displayed.length} of ${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`
-            : `${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`}
-        </span>
-      </div>
-
-      {allTags.length > 0 && (
-        <div className="insp-tag-bar" role="group" aria-label="Filter by tag">
-          <button
-            type="button"
-            className={`chip ${filterTag === null ? "on" : ""}`}
-            onClick={() => setFilterTag(null)}
-          >
-            All tags
-          </button>
-          {allTags.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              className={`chip ${filterTag === tag ? "on" : ""}`}
-              onClick={() => setFilterTag(filterTag === tag ? null : tag)}
-            >
-              #{tag}
-            </button>
-          ))}
-        </div>
-      )}
-
       {displayed.length === 0 ? (
-        <div className="insp-empty-card">
+        <div className="insp-empty-card" onPointerDown={(e) => e.stopPropagation()}>
           <div className="insp-empty-icon-wrap">
             <Icon name="sparkle" size={24} />
           </div>
-          <h2>{hasActiveFilters ? "No matching reference files" : "Your mood board is empty"}</h2>
+          <h2>{filterTag ? "No pictures with this tag" : "Your mood board is empty"}</h2>
           <p className="muted">
-            {hasActiveFilters
-              ? "Try clearing the search or tag filter to see everything in this book."
+            {filterTag
+              ? "Select All to return to the full mood board."
               : canEdit
-              ? "Drop photographs, maps, PDFs, or research clippings anywhere on this page, or click Add files."
-              : "No reference files have been added to this book yet."}
+              ? "Drop photographs, artwork, maps, or clippings anywhere on the board."
+              : "No visual references have been added to this book yet."}
           </p>
-          {hasActiveFilters ? (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setFilterTag(null);
-                setFilterType("all");
-                setSearchQuery("");
-              }}
-            >
-              Reset filters
+          {filterTag ? (
+            <button type="button" className="btn btn-sm" onClick={() => setFilterTag(null)}>
+              Show all
             </button>
           ) : canEdit ? (
             <button type="button" className="btn" onClick={() => fileInputRef.current?.click()}>
-              <Icon name="plus" size={14} /> Choose files to upload
+              <Icon name="plus" size={14} /> Choose pictures
             </button>
           ) : null}
         </div>
       ) : (
-        <div className="insp-studio-grid">
-          {displayed.map((item) => (
-            <InspirationCard
-              key={item.id}
-              item={item}
-              projectId={projectId}
-              canEdit={canEdit}
-              isCover={coverItemId === item.id}
-              isExplicitCover={item.tags.includes("cover")}
-              onSetCover={handleSetCover}
-              onDelete={(id) => void removeInspirationItem(id)}
-              onUpdate={(id, updates) => updateInspirationItem(id, updates)}
-              onPreview={handlePreview}
-              onAddTag={handleAddTag}
-              onRemoveTag={handleRemoveTag}
-            />
-          ))}
+        <div
+          ref={canvasRef}
+          className="insp-mood-canvas"
+          style={{ minHeight: `${canvasHeight}px` }}
+        >
+          {displayed.map((item) => {
+            const layout = computedLayouts[item.id] ?? { x: 24, y: 24, w: 280, z: 1 };
+            return (
+              <MoodBoardPiece
+                key={item.id}
+                item={item}
+                layout={layout}
+                projectId={projectId}
+                canEdit={canEdit}
+                isSelected={selectedId === item.id}
+                isCover={coverItemId === item.id}
+                isExplicitCover={item.tags.includes("cover")}
+                onSelect={setSelectedId}
+                onBringToFront={handleBringToFront}
+                onCommitLayout={handleCommitLayout}
+                onSetCover={handleSetCover}
+                onDelete={(id) => {
+                  setSelectedId(null);
+                  void removeInspirationItem(id);
+                }}
+                onUpdate={(id, updates) => updateInspirationItem(id, updates)}
+                onPreview={handlePreview}
+                onAddTag={handleAddTag}
+                onRemoveTag={handleRemoveTag}
+                onImageLoadAspect={handleImageLoadAspect}
+              />
+            );
+          })}
         </div>
       )}
 

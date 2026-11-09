@@ -14,7 +14,14 @@ export interface CachedCoverArt {
 }
 
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"]);
-const COVER_CACHE_PREFIX = "bookkit-cover-v1:";
+const COVER_CACHE_PREFIX = "bookkit-cover-v2:";
+
+export interface MoodItemLayout {
+  x: number;
+  y: number;
+  w: number;
+  z: number;
+}
 
 export function isImageFile(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
@@ -26,8 +33,40 @@ export function isCoverTag(tag: string): boolean {
   return normalized === "cover" || normalized === "cover-light" || normalized === "cover-dark";
 }
 
+export function isMoodLayoutTag(tag: string): boolean {
+  return tag.trim().toLowerCase().startsWith("mb:");
+}
+
+export function parseMoodLayout(tags: string[]): MoodItemLayout | null {
+  const raw = tags.find((t) => isMoodLayoutTag(t));
+  if (!raw) return null;
+  const body = raw.trim().slice(3);
+  const map: Record<string, number> = {};
+  for (const part of body.split(",")) {
+    const [k, v] = part.split("=");
+    if (k && v !== undefined) {
+      const n = Number(v);
+      if (Number.isFinite(n)) map[k.trim()] = n;
+    }
+  }
+  if (map.w === undefined || map.x === undefined || map.y === undefined) return null;
+  return {
+    x: Math.max(0, Math.round(map.x)),
+    y: Math.max(0, Math.round(map.y)),
+    w: Math.max(120, Math.min(820, Math.round(map.w))),
+    z: Math.max(1, Math.round(map.z ?? 1)),
+  };
+}
+
+export function applyMoodLayout(tags: string[], layout: MoodItemLayout | null): string[] {
+  const withoutLayout = tags.filter((t) => !isMoodLayoutTag(t));
+  if (!layout) return withoutLayout;
+  const tag = `mb:x=${Math.round(layout.x)},y=${Math.round(layout.y)},w=${Math.round(layout.w)},z=${Math.round(layout.z)}`;
+  return [...withoutLayout, tag];
+}
+
 export function visibleInspirationTags(tags: string[]): string[] {
-  return tags.filter((t) => !isCoverTag(t));
+  return tags.filter((t) => !isCoverTag(t) && !isMoodLayoutTag(t));
 }
 
 export function coverToneFromTags(tags: string[]): CoverTone | null {
@@ -37,9 +76,9 @@ export function coverToneFromTags(tags: string[]): CoverTone | null {
 }
 
 export function applyCoverTags(tags: string[], isCover: boolean, tone?: CoverTone | null): string[] {
-  const base = visibleInspirationTags(tags);
-  if (!isCover) return base;
-  return tone ? [...base, "cover", `cover-${tone}`] : [...base, "cover"];
+  const withoutCover = tags.filter((t) => !isCoverTag(t));
+  if (!isCover) return withoutCover;
+  return tone ? [...withoutCover, "cover", `cover-${tone}`] : [...withoutCover, "cover"];
 }
 
 export function pickBookCoverItem<T extends { fileName: string; tags?: string[] | null }>(
@@ -180,17 +219,17 @@ export function clearCachedCover(projectId: string): void {
 const inflight = new Map<string, Promise<CachedCoverArt | null>>();
 
 /**
- * Decodes an inspiration image URL in the browser, center-crops it to a tiny
- * shelf thumbnail (default 96×132 JPEG), measures its luminance so overlaid
- * text uses the inverse color, and caches the thumbnail in localStorage.
+ * Decodes an inspiration image URL in the browser, center-crops it to a sharp
+ * 2x shelf thumbnail (default 192×264 JPEG for 96×132 cover cards), measures its
+ * luminance so overlaid text uses the inverse color, and caches the thumbnail in localStorage.
  */
 export function generateAndCacheCoverThumbnail(
   projectId: string,
   fileName: string,
   signedUrl: string,
   fallbackTone: CoverTone | null = null,
-  targetWidth = 96,
-  targetHeight = 132
+  targetWidth = 192,
+  targetHeight = 264
 ): Promise<CachedCoverArt | null> {
   const cached = readCachedCover(projectId, fileName);
   if (cached) return Promise.resolve(cached);

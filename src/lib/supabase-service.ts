@@ -8,7 +8,7 @@
 import { AUTH_STORAGE_KEY, supabase } from "./supabase-client";
 import { cookieStorage } from "./cookie-storage";
 import { policy as policyDefinition, syncPolicy } from "./policy-blocks";
-import { formMeta, STYLE_KEYS, type BookForm } from "./book-config";
+import { formMeta, readConfig, STYLE_KEYS, updateConfig, type BookForm } from "./book-config";
 import { pickBookCoverItem, type CoverTone } from "./cover-art";
 import type {
   Project,
@@ -2114,11 +2114,93 @@ export interface WorkspaceBook {
   private: boolean;
   cover_file?: string | null;
   cover_tone?: CoverTone | null;
+  book_form?: BookForm;
+  form_label?: string;
+}
+
+const syncedMetadataProjects = new Set<string>();
+
+function resolveBookFormAndTarget(
+  book: WorkspaceBook,
+  yamlContent: string | null
+): {
+  form: BookForm;
+  formLabel: string;
+  targetWords: number;
+  chapterWords: number;
+  needsSync: boolean;
+} {
+  const refWords = Math.max(book.draft_words || 0, book.author_words || 0);
+  const chaptersCount = Math.max(1, book.chapters_total || 1);
+  let hasExplicitForm = false;
+  let hasExplicitTarget = false;
+  let kind: "fiction" | "nonfiction" = "fiction";
+  let subtitle = "";
+  let explicitForm: BookForm | null = null;
+  let explicitTarget: number | null = null;
+  let explicitChapter: number | null = null;
+
+  if (yamlContent) {
+    hasExplicitForm = /^form\s*:/m.test(yamlContent);
+    hasExplicitTarget = /^\s+target_words\s*:/m.test(yamlContent);
+    try {
+      const cfg = readConfig(yamlContent);
+      kind = cfg.kind;
+      subtitle = cfg.subtitle || "";
+      if (hasExplicitForm) explicitForm = cfg.form;
+      if (cfg.targetWords && cfg.targetWords > 0) explicitTarget = cfg.targetWords;
+      if (cfg.chapterWords && cfg.chapterWords > 0) explicitChapter = cfg.chapterWords;
+    } catch {
+      /* ignore malformed yaml */
+    }
+  }
+
+  let form: BookForm = explicitForm ?? "novel";
+  if (!explicitForm) {
+    if (kind === "nonfiction") {
+      form = "nonfiction";
+    } else if (/\bnovella\b/i.test(subtitle)) {
+      form = "novella";
+    } else if (/\bnovelette\b/i.test(subtitle)) {
+      form = "novelette";
+    } else if (/\bshort story\b/i.test(subtitle)) {
+      form = "short-story";
+    } else if (refWords > 0) {
+      if (refWords <= 7500) form = "short-story";
+      else if (refWords <= 14000) form = "novelette";
+      else if (refWords <= 30000) form = "novella";
+      else if (refWords < 55000) form = "short-novel";
+      else form = "novel";
+    }
+  }
+
+  const fm = formMeta(form, kind);
+  const formLabel = form === "nonfiction" ? "Non-fiction" : fm.label;
+
+  const targetWords =
+    explicitTarget ??
+    (book.target_words && book.target_words !== 80000
+      ? book.target_words
+      : refWords > 0
+        ? Math.max(500, Math.round(refWords / 500) * 500)
+        : fm.defaultTargetWords);
+
+  const chapterWords =
+    explicitChapter ??
+    Math.max(100, Math.round(targetWords / chaptersCount / 50) * 50);
+
+  return {
+    form,
+    formLabel,
+    targetWords,
+    chapterWords,
+    needsSync: Boolean(yamlContent) && (!hasExplicitForm || !hasExplicitTarget || book.target_words === 80000),
+  };
 }
 
 /** Every book you can open, with progress and daily activity for the workspace. */
 export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
-  const [{ data, error }, inspRes] = await Promise.all([
+  const [{ data, error }, inspRes, yamlRes] = await Promise.all([
     supabase.rpc("bookkit_workspace", { p_days: days }),
     Promise.resolve()
       .then(() =>
@@ -2126,6 +2208,14 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
           .from("inspiration_items")
           .select("project_id, file_name, tags, added_at")
           .order("added_at")
+      )
+      .catch(() => ({ data: null })),
+    Promise.resolve()
+      .then(() =>
+        supabase
+          .from("bookkit_documents")
+          .select("project_id, content, version")
+          .eq("path", "book.yaml")
       )
       .catch(() => ({ data: null })),
   ]);
@@ -2136,7 +2226,11 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
     file_name: string;
     tags: string[] | null;
   }>;
-  if (inspRows.length === 0) return books;
+  const yamlRows = (yamlRes?.data ?? []) as Array<{
+    project_id: string;
+    content: string;
+    version: number;
+  }>;
 
   const byProject = new Map<string, Array<{ fileName: string; tags: string[] | null }>>();
   for (const row of inspRows) {
@@ -2146,15 +2240,57 @@ export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
     byProject.set(row.project_id, list);
   }
 
+  const yamlByProject = new Map<string, { content: string; version: number }>();
+  for (const row of yamlRows) {
+    if (row?.project_id && typeof row.content === "string") {
+      yamlByProject.set(row.project_id, { content: row.content, version: row.version });
+    }
+  }
+
   return books.map((book) => {
     const items = byProject.get(book.project_id);
-    if (!items || items.length === 0) return book;
-    const picked = pickBookCoverItem(items);
-    if (!picked) return book;
+    const picked = items && items.length > 0 ? pickBookCoverItem(items) : null;
+    const yamlRow = yamlByProject.get(book.project_id) ?? null;
+    const resolved = resolveBookFormAndTarget(book, yamlRow?.content ?? null);
+
+    if (
+      resolved.needsSync &&
+      yamlRow &&
+      book.role === "owner" &&
+      !syncedMetadataProjects.has(book.project_id)
+    ) {
+      syncedMetadataProjects.add(book.project_id);
+      void (async () => {
+        try {
+          const nextYaml = updateConfig(yamlRow.content, {
+            form: resolved.form,
+            targetWords: resolved.targetWords,
+            chapterWords: resolved.chapterWords,
+          });
+          if (nextYaml !== yamlRow.content) {
+            await saveBookDocument(book.project_id, "book.yaml", nextYaml, yamlRow.version);
+          }
+          await supabase
+            .from("projects")
+            .update({ brief_target_word_count: resolved.targetWords })
+            .eq("id", book.project_id);
+        } catch {
+          /* ignore background sync errors */
+        }
+      })();
+    }
+
     return {
       ...book,
-      cover_file: picked.item.fileName,
-      cover_tone: picked.tone,
+      target_words: resolved.targetWords,
+      book_form: resolved.form,
+      form_label: resolved.formLabel,
+      ...(picked
+        ? {
+            cover_file: picked.item.fileName,
+            cover_tone: picked.tone,
+          }
+        : {}),
     };
   });
 }
@@ -2233,10 +2369,11 @@ export async function createLibraryWithShelves(
   slug: string,
   description: string,
   shelves: OnboardingShelfInput[]
-): Promise<{ libraryId: string; shelfIds: string[] }> {
-  const slugErr = validateLibrarySlug(slug);
+): Promise<{ libraryId: string; slug: string; shelfIds: string[] }> {
+  const cleanSlug = slug.trim().toLowerCase();
+  const slugErr = validateLibrarySlug(cleanSlug);
   if (slugErr) throw new Error(slugErr);
-  const libraryId = await createLibrary(name, slug, description);
+  const libraryId = await createLibrary(name, cleanSlug, description);
   const shelfIds: string[] = [];
   for (const [position, shelf] of shelves.entries()) {
     const trimmed = shelf.name.trim();
@@ -2247,7 +2384,7 @@ export async function createLibraryWithShelves(
     if (error) throw error;
     if (data?.id) shelfIds.push(String(data.id));
   }
-  return { libraryId, shelfIds };
+  return { libraryId, slug: cleanSlug, shelfIds };
 }
 
 /**

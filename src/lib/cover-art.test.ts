@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeCoverPixels,
   applyCoverTags,
+  applyMoodLayout,
   dailyInspirationIndex,
   inverseTextColorForTone,
   isImageFile,
   nextShuffleIndex,
+  parseMoodLayout,
   pickBookCoverItem,
   visibleInspirationTags,
 } from "./cover-art";
@@ -86,5 +88,17 @@ describe("cover-art utilities", () => {
     const fallback = pickBookCoverItem(items.slice(0, 2));
     expect(fallback?.item.id).toBe("2");
     expect(fallback?.explicit).toBe(false);
+  });
+
+  it("serializes and parses mood-board layout tags while keeping visible tags clean", () => {
+    const withLayout = applyMoodLayout(["art", "landscape"], { x: 140, y: 80, w: 320, z: 4 });
+    expect(withLayout).toEqual(["art", "landscape", "mb:x=140,y=80,w=320,z=4"]);
+    expect(visibleInspirationTags(withLayout)).toEqual(["art", "landscape"]);
+    expect(parseMoodLayout(withLayout)).toEqual({ x: 140, y: 80, w: 320, z: 4 });
+
+    // Toggling cover tags preserves mood-board layout
+    const withCover = applyCoverTags(withLayout, true, "dark");
+    expect(parseMoodLayout(withCover)).toEqual({ x: 140, y: 80, w: 320, z: 4 });
+    expect(visibleInspirationTags(withCover)).toEqual(["art", "landscape"]);
   });
 });

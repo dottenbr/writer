@@ -1,7 +1,9 @@
 import { useEffect, useReducer, useState } from "react";
 import { useEditorBus } from "./editorBus";
+import { Dictation } from "./Dictation";
+import { useListenStore } from "../../store/useListenStore";
 import { prefs, useBookStore, writePrefs } from "../../store/useBookStore";
-import { Icon, useAccess } from "./common";
+import { chapterForPath, Icon, useAccess } from "./common";
 
 function Btn({ icon, label, active, disabled, onClick, shortcut }: { icon: string; label: string; active?: boolean; disabled?: boolean; onClick: () => void; shortcut?: string }) {
   return (
@@ -14,6 +16,9 @@ function Btn({ icon, label, active, disabled, onClick, shortcut }: { icon: strin
 const mod = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
 export function Toolbar() {
+  const model = useBookStore(s => s.model);
+  const visible = useBookStore(s => s.visibleChapter);
+  const startListening = useListenStore(s => s.start);
   const editor = useEditorBus(s => s.editor);
   const session = useEditorBus(s => s.session);
   const selection = useEditorBus(s => s.selection);
@@ -82,6 +87,11 @@ export function Toolbar() {
       <span className="tb-sep" />
       <button className="tb-text-btn" disabled={!editor} onMouseDown={e => e.preventDefault()} onClick={() => { requestComment(selection); setPanel("comments"); }} title="Comment on the selection">
         <Icon name="comment" size={16} /> Comment
+      </button>
+      <Dictation />
+      <button className="tb-btn" onMouseDown={e => e.preventDefault()} title="Listen to this chapter" aria-label="Listen to this chapter"
+        onClick={() => { const n = chapterForPath(model?.chapters, session?.path ?? "")?.number ?? visible; if (n) startListening(n); }}>
+        <Icon name="headphones" size={16} />
       </button>
       <div className="tb-spacer" />
       {suggesting && <span className="mode-pill" title="Your edits are saved as suggestions for the author to accept or reject">Suggesting</span>}

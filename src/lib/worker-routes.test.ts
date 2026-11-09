@@ -181,3 +181,48 @@ describe("sign-in codes", () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 });
+
+describe("voice", () => {
+  const env = { ...baseEnv } as any;
+  const req = (path: string, body: unknown) => new Request("https://bookkit.test" + path, { method: "POST", headers: { Authorization: "Bearer session" }, body: JSON.stringify(body) });
+  const audio = "A".repeat(400);
+
+  it("refuses people who can't open the book", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json(false)));
+    const run = vi.fn();
+    const res = await worker.fetch(req("/api/voice/transcribe", { projectId: PID, audio }), { ...env, AI: { run } });
+    expect(res.status).toBe(403);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("transcribes twice, takes only name fixes from the biased pass, and rejects a tidy-up that changes words", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json(true)));
+    const run = vi.fn(async (model: string, input: any) => {
+      if (model.includes("whisper")) return { text: String(input.initial_prompt).startsWith("Names") ? "Nora went to see Agathe. new paragraph she waited" : "Nora went to see Agata. new paragraph she waited" };
+      return { choices: [{ message: { content: "Nora went quickly to see Agathe.\n\nShe waited." } }] };
+    });
+    const res = await worker.fetch(req("/api/voice/transcribe", { projectId: PID, audio, vocabulary: ["Agathe", "Nora"], context: "The well." }), { ...env, AI: { run } });
+    const body = await res.json();
+    expect(body).toMatchObject({ original: "Nora went to see Agata. new paragraph she waited", corrected: true, polished: false });
+    expect(body.text).toBe("Nora went to see Agathe.\n\nShe waited");
+    expect(run.mock.calls.filter(c => String(c[0]).includes("whisper"))).toHaveLength(2);
+    expect(run.mock.calls.find(c => String(c[1].initial_prompt).startsWith("Names"))![1].initial_prompt).toContain("Names: Agathe, Nora.");
+    expect(run.mock.calls.find(c => !String(c[1].initial_prompt).startsWith("Names"))![1].initial_prompt).toContain("next passage");
+  });
+
+  it("accepts a tidy-up that only adds punctuation, then applies the house style", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json(true)));
+    const run = vi.fn(async (model: string) => model.includes("whisper") ? { text: "she said come back" } : { choices: [{ message: { content: 'She said, "Come back."' } }] });
+    const body = await (await worker.fetch(req("/api/voice/transcribe", { projectId: PID, audio, style: { quotes: "single" } }), { ...env, AI: { run } })).json();
+    expect(body).toMatchObject({ polished: true, text: "She said, ‘Come back.’" });
+  });
+
+  it("reads text aloud with a known voice", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json(true)));
+    const run = vi.fn(async (_model: string, _input: unknown) => new Uint8Array(500).buffer);
+    const res = await worker.fetch(req("/api/voice/speak", { projectId: PID, text: "Nora counted the goats.", voice: "evil" }), { ...env, AI: { run } });
+    expect(res.headers.get("Content-Type")).toBe("audio/mpeg");
+    expect((await res.arrayBuffer()).byteLength).toBe(500);
+    expect(run.mock.calls[0][1]).toMatchObject({ text: "Nora counted the goats.", speaker: "thalia", encoding: "mp3" });
+  });
+});

@@ -12,6 +12,7 @@ import { BibleBoard, PlanBoard } from "./Boards";
 import { EntityIndex, EntityPage } from "./BiblePages";
 import { SceneBoard } from "./SceneBoard";
 import { TimelinePage } from "./TimelinePage";
+import { ListenBar } from "./ListenBar";
 import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
 import { useHomeStore } from "../../store/useHomeStore";
 import { canWriteIn, useLibraryStore } from "../../store/useLibraryStore";
@@ -675,6 +676,7 @@ export function Studio() {
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       {newChapter && <NewChapterDialog onClose={() => setNewChapter(false)} />}
       <HoverCard />
+      <ListenBar />
     </div>
   );
 }

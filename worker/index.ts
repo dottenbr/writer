@@ -1,5 +1,6 @@
 import { AI_PROMPT_LIMIT } from '../src/lib/ai-policy';
 import { assistantPolicy, declaredPolicy } from '../src/lib/policy-blocks';
+import { applyHouseStyle, applySpokenCommands, correctVoiceTerms, onlyPunctuationChanged, voiceVocabulary } from '../src/lib/voice-text';
 interface Env { ASSETS:{fetch:(request:Request)=>Promise<Response>}; SUPABASE_URL:string; SUPABASE_PUBLISHABLE_KEY:string; SUPABASE_SECRET_KEY?:string; AI?:{run:(model:string,input:unknown,options?:unknown)=>Promise<any>}; EMAIL?:{send:(message:any)=>Promise<{messageId?:string}>} }
 /** Models included with Bookkit through Cloudflare Workers AI. No user key needed. */
 export const INCLUDED_MODELS=[
@@ -238,9 +239,93 @@ async function signInVerify(request:Request,env:Env,url:URL):Promise<Response>{
  return json({access_token:session.access_token,refresh_token:session.refresh_token});
 }
 
-export default {async fetch(request:Request,env:Env):Promise<Response>{
+
+// ---------- voice: dictation and reading aloud (Workers AI) ----------
+
+export const TRANSCRIBE_MODEL='@cf/openai/whisper-large-v3-turbo';
+export const SPEAK_MODEL='@cf/deepgram/aura-2-en';
+export const POLISH_MODEL='@cf/openai/gpt-oss-120b';
+export const VOICES=['thalia','andromeda','helena','luna','athena','apollo','arcas','orion','hermes','zeus'];
+
+async function readJson(request:Request,max:number):Promise<any>{
+ const reader=request.body?.getReader();if(!reader)throw new Error('Request body required.');const chunks:Uint8Array[]=[];let total=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>max){await reader.cancel();throw new Error('too large');}chunks.push(value);}}finally{reader.releaseLock();}
+ const bytes=new Uint8Array(total);let o=0;for(const c of chunks){bytes.set(c,o);o+=c.length;}return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+/** Signed in, same origin, and allowed to read the book. Returns an error response or the auth headers. */
+async function voiceAccess(request:Request,env:Env,url:URL,projectId:string,signal:AbortSignal):Promise<Response|Record<string,string>>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.AI)return json({error:'Voice is not configured on this server.'},503);
+ const authorization=request.headers.get('Authorization')??'';if(!/^Bearer \S+$/.test(authorization))return json({error:'Sign in to use voice.'},401);
+ if(!/^[a-f0-9-]{36}$/i.test(projectId))return json({error:'Open a book first.'},400);
+ const headers={apikey:env.SUPABASE_PUBLISHABLE_KEY,Authorization:authorization,'Content-Type':'application/json'};
+ const access=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/has_project_access',{method:'POST',headers,body:JSON.stringify({p_project_id:projectId,p_min_role:'viewer'}),signal});
+ if(!access.ok||await access.json()!==true)return json({error:'You can’t open this book.'},403);
+ return headers;
+}
+
+async function transcribe(request:Request,env:Env,url:URL):Promise<Response>{
+ const signal=AbortSignal.timeout(110000);
+ let body:any;try{body=await readJson(request,12*1024*1024);}catch{return json({error:'Record up to two minutes at a time.'},413);}
+ const allowed=await voiceAccess(request,env,url,String(body?.projectId??''),signal);if(allowed instanceof Response)return allowed;
+ const audio=String(body?.audio??'');
+ if(!audio||audio.length<200||!/^[A-Za-z0-9+/=]+$/.test(audio.slice(0,200)))return json({error:'No audio received.'},400);
+ const vocabulary=voiceVocabulary((Array.isArray(body?.vocabulary)?body.vocabulary:[]).map(String).slice(0,200));
+ const before=String(body?.context??'').replace(/\s+/g,' ').slice(-300);
+ const base={audio,task:'transcribe',language:'en',vad_filter:true,condition_on_previous_text:false};
+ // Without any prompt Whisper drops punctuation and capitals; a neutral sentence keeps them without steering words.
+ const NEUTRAL='Here is the next passage of the chapter, as the author dictates it.';
+ const prompt=[vocabulary.length?`Names: ${vocabulary.join(', ')}.`:'',before].filter(Boolean).join(' ').slice(0,900);
+ const [plain,biased]=await Promise.all([
+  env.AI!.run(TRANSCRIBE_MODEL,{...base,initial_prompt:before?`${NEUTRAL} ${before}`.slice(0,900):NEUTRAL}),
+  prompt?env.AI!.run(TRANSCRIBE_MODEL,{...base,initial_prompt:prompt}):Promise.resolve(null),
+ ]).catch(()=>[null,null]);
+ const original=String(plain?.text??'').trim();
+ if(!original)return json({error:'No speech was recognised. Try again a little closer to the microphone.'},422);
+ let text=biased?.text?correctVoiceTerms(original,String(biased.text).trim(),vocabulary):original;
+ const corrected=text!==original;
+ text=applySpokenCommands(text);
+ let polished=false;
+ if(body?.polish!==false&&text.length<6000){
+  try{
+   const out=await env.AI!.run(POLISH_MODEL,{messages:[
+    {role:'system',content:'You fix the punctuation of a passage a novelist dictated. Fix only punctuation, capital letters and paragraph breaks. Do not change, add, remove, reorder or correct any word, including grammar or spelling. Dialogue gets quotation marks. Return only the passage.'},
+    {role:'user',content:text}],max_tokens:4096});
+   const raw=out?.choices?.[0]?.message?.content??out?.response??'';
+   const candidate=String(raw).replace(/^\s*<think>[\s\S]*?<\/think>\s*/,'').trim();
+   if(candidate&&onlyPunctuationChanged(text,candidate)){text=candidate;polished=true;}
+  }catch{/* keep the unpolished text */}
+ }
+ text=applyHouseStyle(text,body?.style&&typeof body.style==='object'?body.style:{});
+ return json({original,text,corrected,polished});
+}
+
+async function speak(request:Request,env:Env,url:URL,ctx?:{waitUntil:(p:Promise<unknown>)=>void}):Promise<Response>{
+ const signal=AbortSignal.timeout(60000);
+ let body:any;try{body=await readJson(request,16*1024);}catch{return json({error:'Too much text at once.'},413);}
+ const allowed=await voiceAccess(request,env,url,String(body?.projectId??''),signal);if(allowed instanceof Response)return allowed;
+ const text=String(body?.text??'').trim();
+ if(!text||text.length>2400)return json({error:'Read up to 2,400 characters at a time.'},400);
+ const voice=VOICES.includes(body?.voice)?body.voice:VOICES[0];
+ const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`${SPEAK_MODEL}|${voice}|${text}`)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const key=new Request(`${url.origin}/__voice/${digest}.mp3`);
+ const cache=(globalThis as any).caches?.default as Cache|undefined;
+ const hit=await cache?.match(key);
+ if(hit)return new Response(hit.body,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'private, max-age=86400','X-Voice-Cache':'hit'}});
+ const result=await env.AI!.run(SPEAK_MODEL,{text,speaker:voice,encoding:'mp3'});
+ const bytes=result instanceof ReadableStream?await new Response(result).arrayBuffer():result instanceof ArrayBuffer?result:result?.audio?Uint8Array.from(atob(result.audio),c=>c.charCodeAt(0)).buffer:null;
+ if(!bytes||bytes.byteLength<100)return json({error:'The voice didn’t answer. Try again.'},502);
+ if(cache){const put=cache.put(key,new Response(bytes,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'public, max-age=2592000'}}));if(ctx)ctx.waitUntil(put);else await put;}
+ return new Response(bytes,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'private, max-age=86400','X-Voice-Cache':'miss'}});
+}
+
+export default {async fetch(request:Request,env:Env,ctx?:{waitUntil:(p:Promise<unknown>)=>void}):Promise<Response>{
  const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(url.pathname==='/api/sign-in-code'||url.pathname==='/api/sign-in-link')return signInCode(request,env,url).catch(()=>json({ok:true}));
+ if(url.pathname==='/api/voice/transcribe')return transcribe(request,env,url).catch(()=>json({error:'Transcription failed. Try again.'},502));
+ if(url.pathname==='/api/voice/speak')return speak(request,env,url,ctx).catch(()=>json({error:'Reading aloud failed. Try again.'},502));
  if(url.pathname==='/api/sign-in-verify')return signInVerify(request,env,url).catch(()=>json({error:'Could not sign in with that code. Try again.'},502));
  if(url.pathname==='/api/invite-link')return inviteLink(request,env,url).catch(()=>json({error:'Could not create a sign-in link. Try again.'},502));
  if(url.pathname!=='/api/ai')return json({error:'Not found'},404);

@@ -1146,3 +1146,32 @@ a.menu-item { text-decoration: none; }
   .scene-inline-body .scene-field, .scene-inline-row { grid-template-columns: 1fr; gap: 0; }
 }
 .chapter .doc-prose hr::before { top: 0; transform: translate(-50%, -50%); line-height: 1; height: 1em; display: block; }
+
+/* ---------- voice ---------- */
+.dictation { position: relative; display: inline-flex; align-items: center; }
+.tb-btn.recording { color: #fff; background: var(--danger); animation: rec-pulse 1.4s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 25%, transparent); } }
+.dictation-status { position: absolute; top: calc(100% + 8px); left: 0; z-index: 40; white-space: nowrap; display: inline-flex; gap: 10px; align-items: center; background: var(--ink); color: var(--surface); border-radius: 9px; padding: 7px 11px; font: 12.5px var(--ui); box-shadow: var(--shadow-pop); }
+.dictation-status .link-btn { color: color-mix(in srgb, var(--surface) 80%, var(--accent)); }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block; }
+.chapter-listen { border: 0; background: none; display: inline-flex; align-items: center; gap: 4px; font: 500 11.5px var(--ui); letter-spacing: 0; text-transform: none; color: var(--ink-3); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.chapter-listen:hover { color: var(--accent-ink); background: var(--accent-softer); }
+.doc-prose p.reading-now { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: -8px 0 0 color-mix(in srgb, var(--accent) 9%, transparent), 8px 0 0 color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 3px; transition: background .3s; }
+.listen-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 70; width: min(760px, calc(100vw - 24px)); box-sizing: border-box; background: var(--surface); border: 1px solid var(--line-2); border-radius: 16px; box-shadow: var(--shadow-pop); padding: 10px 14px 10px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; font: 13px var(--ui); overflow: hidden; }
+.listen-progress { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--surface-3); }
+.listen-progress span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.listen-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.listen-title span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.listen-controls { display: flex; align-items: center; gap: 6px; }
+.listen-play { width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--ink); color: var(--surface); display: grid; place-items: center; cursor: pointer; }
+.listen-play:disabled { opacity: .7; }
+.listen-options { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.listen-options select { height: 30px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: 12.5px var(--ui); padding: 0 4px; }
+.listen-follow { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.listen-follow input { appearance: auto; width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
+.listen-error { grid-column: 1 / -1; color: var(--danger); font-size: 12.5px; }
+@media (max-width: 760px) {
+  .listen-bar { grid-template-columns: 1fr auto; bottom: 10px; padding: 12px 12px 10px; }
+  .listen-options { grid-column: 1 / -1; justify-content: space-between; }
+  .dictation-status { position: fixed; top: auto; bottom: 90px; left: 12px; right: 12px; white-space: normal; }
+}

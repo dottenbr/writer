@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
+import { useListenStore } from "../../store/useListenStore";
 import { discardBookDocument, saveBookDocument } from "../../lib/supabase-service";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
 import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
@@ -62,6 +63,7 @@ function ChapterHeader({ chapter, session, active }: { chapter: ChapterInfo; ses
         <span>Chapter {chapter.number}</span>
         <span className={`chapter-state ${st.key}`}>{st.label}</span>
         {showingAuthor && <span className="chapter-words">{formatWords(chapter.authorWords)} words</span>}
+        <button className="chapter-listen" onClick={() => useListenStore.getState().start(chapter.number)} title="Listen to this chapter"><Icon name="headphones" size={13} /> Listen</button>
         {!showingAuthor && chapter.referenceWords > 0 && <span className="chapter-words">{formatWords(chapter.referenceWords)} words in draft</span>}
       </div>
       {editableMeta ? (

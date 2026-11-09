@@ -453,7 +453,7 @@ export function ContextPanel() {
   const session = useEditorBus(s => s.session);
   const openThreads = useBookStore(s => s.openThreads);
   const pending = useBookStore(s => s.pendingSuggestions);
-  if (!model || view !== "write") return null;
+  if (!model || !["write", "plan", "bible"].includes(view)) return null;
 
   const inManuscript = location.path === "" || location.path.startsWith("@") || !!chapterForPath(model.chapters, location.path);
   const activePath = session?.path ?? null;

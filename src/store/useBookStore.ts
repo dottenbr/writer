@@ -3,8 +3,9 @@ import { listBookDocuments, readBookDocument, type BookDocumentRow } from "../li
 import { subscribeBookActivity, readBookReview, type Suggestion, type Thread } from "../lib/bookkit-collaboration";
 import { buildBookModel, type BookModel } from "../lib/book-model";
 import { supabase } from "../lib/supabase-client";
+import { viewForPath, type Route, type StudioView } from "../lib/book-url";
 
-export type View = "write" | "plan" | "bible" | "inspiration" | "settings";
+export type View = StudioView;
 
 export interface Location {
   /** Document path, or "" for the book overview. */
@@ -53,6 +54,8 @@ interface BookState {
   refreshReviewCounts: () => Promise<void>;
   setView: (view: View) => void;
   go: (path: string, opts?: { anchor?: string; find?: string; view?: View }) => void;
+  /** Show a route from the address bar (back/forward, reload, shared link). */
+  applyRoute: (route: Route) => void;
   selectEntity: (id: string | null) => void;
   setPanel: (panel: string, open?: boolean) => void;
   togglePanel: () => void;
@@ -63,6 +66,7 @@ let stopActivity: (() => void) | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
 let nonce = 0;
+let lastWritePath = "";
 
 const PREF_KEY = "bookkit-ui";
 function readPrefs(): Record<string, any> {
@@ -127,7 +131,8 @@ export const useBookStore = create<BookState>((set, get) => {
       if (get().projectId === projectId && get().status !== "error") return;
       get().unload();
       const saved = prefs().locations?.[projectId];
-      set({ projectId, files: [], model: null, status: "loading", error: "", location: { path: saved?.path ?? "", nonce: ++nonce }, view: saved?.view ?? "write", selectedEntity: null });
+      lastWritePath = saved?.view === "write" ? saved.path ?? "" : "";
+      set({ projectId, files: [], model: null, status: "loading", error: "", location: { path: saved?.path ?? "", anchor: saved?.anchor, nonce: ++nonce }, view: saved?.view ?? "write", selectedEntity: null });
       try {
         const files = await listBookDocuments(projectId);
         if (get().projectId !== projectId) return;
@@ -211,18 +216,20 @@ export const useBookStore = create<BookState>((set, get) => {
     },
 
     setView: (view) => {
-      set({ view });
-      const { projectId, location } = get();
-      if (projectId) writePrefs({ locations: { ...(prefs().locations ?? {}), [projectId]: { path: location.path, view } } });
+      // Each view opens on its overview; the manuscript returns to where you were.
+      get().go(view === "write" ? lastWritePath : "", { view });
     },
 
     go: (path, opts = {}) => {
-      const view = opts.view ?? "write";
+      const view = opts.view ?? (path ? viewForPath(path) : "write");
+      if (view === "write") lastWritePath = path;
       set({ location: { path, anchor: opts.anchor, find: opts.find, nonce: ++nonce }, view });
       const { projectId } = get();
-      if (projectId) writePrefs({ locations: { ...(prefs().locations ?? {}), [projectId]: { path, view } } });
+      if (projectId) writePrefs({ locations: { ...(prefs().locations ?? {}), [projectId]: { path, view, anchor: opts.anchor } } });
       if (path.startsWith("research/")) void get().ensureLoaded(path);
     },
+
+    applyRoute: (route) => get().go(route.path, { view: route.view, anchor: route.anchor }),
 
     selectEntity: (id) => set(s => ({ selectedEntity: id, panel: id ? "context" : s.panel, panelOpen: id ? true : s.panelOpen })),
     setPanel: (panel, open = true) => { set({ panel, panelOpen: open }); writePrefs({ panel, panelOpen: open }); },

@@ -10,8 +10,10 @@ Bookkit (bookkit.net) is a collaborative book-writing app built with React + Typ
 
 Every book is stored as Bookkit files (`book.yaml`, `manuscript/`, `draft/`, `bible/`, `outline/`, `craft/`, `research/`) in `bookkit_documents`, but the UI never shows files. `src/components/studio/` presents one linked workspace:
 
-- `Studio.tsx` — shell: top bar (book switcher, Write / Plan / Bible views, ⌘K jump palette, sharing, account), entity hover cards, link navigation, new book/chapter dialogs.
-- `Navigator.tsx` — contents: manuscript chapters (with parts and status), story bible, plan, craft, research.
+- `Studio.tsx` — shell: top bar (book switcher, menu bar Manuscript / Plan / Bible / Craft / Research / Inspiration with a dropdown of each section's pages, ⌘K jump palette, sharing, account), entity hover cards, link navigation, new book/chapter dialogs, and `useUrlSync` (address bar ⇄ store, back/forward).
+- `src/lib/book-url.ts` — readable URLs: `/<book>/chapter/2`, `/<book>/bible/characters/nora`, `/<book>/outline/chapters`, `/<book>/brief`… `go(path)` picks the view from the path (`viewForPath`): `bible/*` → Bible, `outline/*` and `@brief` → Plan, everything else → Write.
+- `Navigator.tsx` — contents for the current section: manuscript chapters (with parts and status) plus craft/research; plan pages; bible pages with every entry listed.
+- `BiblePages.tsx` — bible pages named like characters/places/organizations/motifs (`entityKindForPath`) show as cards (`EntityIndex`); each `## Name` section opens as its own editable page (`EntityPage`, edits only that section via `src/lib/entity-section.ts`). "Whole page" shows the file as one document.
 - `ManuscriptView.tsx` — the whole manuscript as one continuous document; the chapter you click becomes a live editor, the rest render statically. Reference-draft chapters are read-only; "Write this chapter" starts the author's file (bookkit `start` semantics, never copying draft prose). While that file is still empty, "Go back to the reference draft" deletes it again (owner only, version-checked).
 - `CompanionView.tsx` — bible / plan / craft pages as rich documents.
 - `ContextPanel.tsx` — chapter plan + scene cards, mentioned bible entries, "referenced in", reference draft, comments and suggestions, AI assist.

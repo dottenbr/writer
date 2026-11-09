@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
-import type { CompanionDoc, Group } from "../../lib/book-model";
+import { entityKindForPath, type CompanionDoc, type Group } from "../../lib/book-model";
 import { chapterForPath, chapterState, formatWords, Icon, useAccess } from "./common";
 
 const GROUPS: Array<{ id: Group; label: string }> = [
   { id: "story", label: "Story" },
   { id: "bible", label: "Story bible" },
-  { id: "plan", label: "Plan" },
+  { id: "plan", label: "Planning pages" },
   { id: "craft", label: "Craft" },
   { id: "matter", label: "Front & back matter" },
   { id: "research", label: "Research" },
@@ -31,7 +31,13 @@ function Section({ id, label, count, children, defaultOpen = true }: { id: strin
   );
 }
 
-export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
+const SCOPE_GROUPS: Record<"write" | "plan" | "bible", Group[]> = {
+  write: ["craft", "matter", "research", "publication", "source"],
+  plan: ["plan"],
+  bible: ["story", "bible"],
+};
+
+export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () => void; scope?: "write" | "plan" | "bible" }) {
   const model = useBookStore(s => s.model);
   const location = useBookStore(s => s.location);
   const view = useBookStore(s => s.view);
@@ -46,11 +52,12 @@ export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
 
   const q = filter.trim().toLowerCase();
   const chapters = useMemo(() => (model?.chapters ?? []).filter(c => !q || c.label.toLowerCase().includes(q)), [model, q]);
-  const docs = useMemo(() => (model?.companions ?? []).filter(d => !q || d.title.toLowerCase().includes(q) || d.headings.some(h => h.text.toLowerCase().includes(q))), [model, q]);
+  const docs = useMemo(() => (model?.companions ?? []).filter(d => !q || d.title.toLowerCase().includes(q) || d.headings.some(h => h.text.toLowerCase().includes(q)) || (model?.entities ?? []).some(e => e.path === d.path && e.name.toLowerCase().includes(q))), [model, q]);
   if (!model) return null;
 
   const current = chapterForPath(model.chapters, location.path);
   const inManuscript = view === "write" && (location.path === "" || !!current);
+  const entityFiles = new Set(model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path));
   const activeNumber = inManuscript ? (visibleChapter ?? current?.number) : undefined;
   const written = model.chapters.filter(c => c.authorPath && !c.started).length;
   const totalWords = model.chapters.reduce((n, c) => n + c.authorWords, 0);
@@ -62,8 +69,25 @@ export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
 
   let lastPart = "";
   const docRow = (d: CompanionDoc) => {
-    const active = view === "write" && location.path === d.path;
-    const entities = active ? model.entities.filter(e => e.path === d.path) : [];
+    const active = location.path === d.path;
+    // Bible pages made of entries list every entry, always.
+    if (entityFiles.has(d.path)) {
+      const entries = model.entities.filter(e => e.path === d.path).filter(e => !q || e.name.toLowerCase().includes(q) || d.title.toLowerCase().includes(q));
+      return (
+        <div key={d.path}>
+          <button className={`nav-item ${active && !location.anchor ? "active" : ""}`} onClick={() => go(d.path, { view: "bible" })} title={d.title}>
+            <span className="nav-item-text">{d.title}</span>
+            <span className="nav-meta">{model.entities.filter(e => e.path === d.path).length}</span>
+          </button>
+          <div className="nav-outline">
+            {entries.map(e => (
+              <button key={e.id} className={`nav-outline-item ${active && location.anchor === e.slug ? "active" : ""}`} onClick={() => go(d.path, { anchor: e.slug, view: "bible" })}>{e.name}</button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    const headings = active ? d.headings.filter(h => h.level === 2) : [];
     return (
       <div key={d.path}>
         <button className={`nav-item ${active ? "active" : ""}`} onClick={() => go(d.path)} title={d.title}>
@@ -71,10 +95,10 @@ export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
           {d.isAsset && <span className="nav-meta">file</span>}
           {badge(d.path)}
         </button>
-        {active && (entities.length ? entities : d.headings.filter(h => h.level === 2)).length > 0 && (
+        {headings.length > 0 && (
           <div className="nav-outline">
-            {(entities.length ? entities.map(e => ({ slug: e.slug, text: e.name, id: e.id })) : d.headings.filter(h => h.level === 2).map(h => ({ slug: h.slug, text: h.text, id: "" }))).map(h => (
-              <button key={h.slug + h.text} className={`nav-outline-item ${location.anchor === h.slug ? "active" : ""}`} onClick={() => { go(d.path, { anchor: h.slug }); if (h.id) selectEntity(h.id); }}>
+            {headings.map(h => (
+              <button key={h.slug + h.text} className={`nav-outline-item ${location.anchor === h.slug ? "active" : ""}`} onClick={() => go(d.path, { anchor: h.slug })}>
                 {h.text}
               </button>
             ))}
@@ -100,7 +124,7 @@ export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
         <kbd title="Jump anywhere">⌘K</kbd>
       </div>
       <div className="nav-scroll">
-        <Section id="manuscript" label="Manuscript" count={model.chapters.length}>
+        {scope === "write" && <Section id="manuscript" label="Manuscript" count={model.chapters.length}>
           <button className={`nav-item nav-title-page ${inManuscript && location.path === "" && !activeNumber ? "active" : ""}`} onClick={() => go("")}>
             <span className="nav-item-text">Title page</span>
           </button>
@@ -121,15 +145,16 @@ export function Navigator({ onNewChapter }: { onNewChapter: () => void }) {
             );
           })}
           {isOwner && !q && <button className="nav-item nav-add" onClick={onNewChapter}><Icon name="plus" size={14} /><span>New chapter</span></button>}
-        </Section>
-        {GROUPS.map(g => {
+        </Section>}
+        {scope === "plan" && <div className="nav-top-items">
+          <button className={`nav-item ${location.path === "@brief" ? "active" : ""}`} onClick={() => go("@brief")}><Icon name="flag" size={14} /><span className="nav-item-text">Brief</span></button>
+          <button className={`nav-item ${view === "plan" && location.path === "" ? "active" : ""}`} onClick={() => go("", { view: "plan" })}><Icon name="grid" size={14} /><span className="nav-item-text">All chapters</span><span className="nav-meta">{model.chapters.length}</span></button>
+        </div>}
+        {scope === "bible" && <div className="nav-top-items">
+          <button className={`nav-item ${view === "bible" && location.path === "" ? "active" : ""}`} onClick={() => go("", { view: "bible" })}><Icon name="person" size={14} /><span className="nav-item-text">Overview</span><span className="nav-meta">{model.entities.length}</span></button>
+        </div>}
+        {GROUPS.filter(g => SCOPE_GROUPS[scope].includes(g.id)).map(g => {
           const items = docs.filter(d => d.group === g.id);
-          if (g.id === "story") return (
-            <Section key={g.id} id={g.id} label={g.label}>
-              {(!q || "brief".includes(q)) && <button className={`nav-item ${view === "write" && location.path === "@brief" ? "active" : ""}`} onClick={() => go("@brief")}><span className="nav-item-text">Brief</span></button>}
-              {items.map(docRow)}
-            </Section>
-          );
           if (!items.length) return null;
           return (
             <Section key={g.id} id={g.id} label={g.label} count={g.id === "research" || g.id === "source" ? items.length : undefined} defaultOpen={!["research", "source", "publication"].includes(g.id)}>

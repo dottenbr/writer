@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
 import { useAuthStore } from "./useAuthStore";
 import type {
   Project,
@@ -1377,10 +1378,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       return;
     }
 
-    // Try to restore last project, or fall back to first
-    const targetId = cfg.lastProjectId && projectList.some((p) => p.id === cfg.lastProjectId)
+    // The book named in the address first, then the last one used, then the first.
+    const fromUrl = bookIdForSlug(projectList, urlBookSlug());
+    const targetId = fromUrl ?? (cfg.lastProjectId && projectList.some((p) => p.id === cfg.lastProjectId)
       ? cfg.lastProjectId
-      : projectList[0].id;
+      : projectList[0].id);
 
     try {
       const [project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([

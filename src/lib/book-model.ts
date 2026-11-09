@@ -147,6 +147,13 @@ const KIND_BY_FILE: Array<[RegExp, EntityKind]> = [
   [/motifs|symbols|objects/, "motif"],
 ];
 
+/** The kind of entry a bible page holds as "## Name" sections, if it is a page of cards (characters, places…). */
+export function entityKindForPath(path: string): EntityKind | undefined {
+  if (!path.startsWith("bible/") || !path.endsWith(".md")) return undefined;
+  const base = path.slice(6).replace(/\.md$/, "");
+  return KIND_BY_FILE.find(([re]) => re.test(base))?.[1];
+}
+
 const STOP = new Set(["The", "A", "An", "Doctor", "Dr", "Mr", "Mrs", "Ms", "Herr", "Frau", "Father", "Mother", "Saint", "St", "Old", "Young", "Minor", "Other", "And"]);
 
 function aliasesFor(name: string, kind: EntityKind): string[] {

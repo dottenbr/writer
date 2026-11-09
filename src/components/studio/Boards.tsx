@@ -1,10 +1,11 @@
 import { Fragment, useMemo, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
-import { chapterState, formatWords, Icon, initials, KIND_LABEL, useEntityMatcher } from "./common";
-import { mentionsIn, sections, type Entity, type EntityKind } from "../../lib/book-model";
+import { chapterState, formatWords, Icon, KIND_LABEL } from "./common";
+import { entityKindForPath, sections, type Entity, type EntityKind } from "../../lib/book-model";
+import { EntityTile, KIND_ORDER, KIND_PLURAL, useAppearances } from "./BiblePages";
 import { PlanList } from "./PlanList";
 import { prefs, writePrefs } from "../../store/useBookStore";
-import { markdownToPlain, splitDocument } from "../../lib/markdown-doc";
+import { splitDocument } from "../../lib/markdown-doc";
 
 export function PlanBoard() {
   const model = useBookStore(s => s.model)!;
@@ -84,29 +85,16 @@ export function PlanBoard() {
   );
 }
 
-const KIND_ORDER: EntityKind[] = ["character", "place", "organization", "motif", "entry"];
-const KIND_PLURAL: Record<EntityKind, string> = { character: "Characters", place: "Places", organization: "Organizations", motif: "Motifs", entry: "Entries" };
-
 export function BibleBoard() {
   const model = useBookStore(s => s.model)!;
-  const files = useBookStore(s => s.files);
   const go = useBookStore(s => s.go);
-  const selectEntity = useBookStore(s => s.selectEntity);
-  const matcher = useEntityMatcher();
+  const appearances = useAppearances();
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<EntityKind | "all">("all");
-  const appearances = useMemo(() => {
-    const out = new Map<string, number>();
-    for (const c of model.chapters) {
-      const m = mentionsIn(markdownToPlain(files.find(f => f.path === c.currentPath)?.content ?? ""), matcher);
-      m.forEach((_, id) => out.set(id, (out.get(id) ?? 0) + 1));
-    }
-    return out;
-  }, [model, files, matcher]);
-  const reference = model.companions.filter(d => (d.group === "story" || d.group === "bible") && !model.entities.some(e => e.path === d.path));
+  const reference = model.companions.filter(d => (d.group === "story" || d.group === "bible") && !entityKindForPath(d.path));
   const kinds = KIND_ORDER.filter(k => model.entities.some(e => e.kind === k));
-  const filtered = model.entities.filter(e => kind === "all" || e.kind === kind).filter(e => !q || e.name.toLowerCase().includes(q.toLowerCase()) || e.summary.toLowerCase().includes(q.toLowerCase()));
-  const open = (e: Entity) => { go(e.path, { anchor: e.slug }); selectEntity(e.id); };
+  const filtered = model.entities.filter(e => kind === "all" || e.kind === kind).filter(e => !q || e.name.toLowerCase().includes(q.toLowerCase()) || e.markdown.toLowerCase().includes(q.toLowerCase()));
+  const open = (e: Entity) => go(e.path, { anchor: e.slug, view: "bible" });
   return (
     <div className="board">
       <header className="board-head">
@@ -132,30 +120,25 @@ export function BibleBoard() {
           ))}
         </div>
       )}
-      {KIND_ORDER.map(kind => {
-        const list = filtered.filter(e => e.kind === kind);
-        if (!list.length) return null;
+      {[...new Set([...(q || kind !== "all" ? [] : model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path)), ...filtered.map(e => e.path)])].map(path => {
+        const list = filtered.filter(e => e.path === path);
+        const title = model.companions.find(d => d.path === path)?.title ?? KIND_PLURAL[list[0]?.kind ?? "entry"];
+        if (!list.length) return (
+          <section key={path} className="bible-section">
+            <h2><button className="bible-section-link" onClick={() => go(path, { view: "bible" })}>{title} <span>0</span><Icon name="chevron" size={13} /></button></h2>
+            <button className="entity-tile empty-tile" onClick={() => go(path, { view: "bible" })}><Icon name="plus" size={16} /> Add the first {KIND_LABEL[entityKindForPath(path) ?? "entry"].toLowerCase()}</button>
+          </section>
+        );
         return (
-          <section key={kind} className="bible-section">
-            <h2>{KIND_PLURAL[kind]} <span>{list.length}</span></h2>
-            <div className="card-grid">
-              {list.map(e => (
-                <button key={e.id} className="entity-tile" onClick={() => open(e)}>
-                  <div className="entity-tile-top">
-                    <span className={`mention-avatar large ${e.kind}`}>{initials(e.name)}</span>
-                    <div>
-                      <div className="entity-tile-name">{e.name}</div>
-                      <div className="entity-tile-kind">{e.group ? "Group" : KIND_LABEL[e.kind]}{appearances.get(e.id) ? ` · in ${appearances.get(e.id)} chapter${appearances.get(e.id) === 1 ? "" : "s"}` : ""}</div>
-                    </div>
-                  </div>
-                  <p className="entity-tile-summary">{e.summary.replace(/^Role:\s*/i, "")}</p>
-                </button>
-              ))}
+          <section key={path} className="bible-section">
+            <h2><button className="bible-section-link" onClick={() => go(path, { view: "bible" })}>{title} <span>{list.length}</span><Icon name="chevron" size={13} /></button></h2>
+            <div className="card-grid entity-grid">
+              {list.map(e => <EntityTile key={e.id} entity={e} chapters={appearances.get(e.id)} onOpen={() => open(e)} />)}
             </div>
           </section>
         );
       })}
-      {model.entities.length === 0 && (
+      {model.entities.length === 0 && !model.companions.some(d => entityKindForPath(d.path)) && (
         <div className="empty-board">
           <p>No bible entries yet. Add <strong>## Name</strong> sections to the characters or places pages and they appear here.</p>
         </div>

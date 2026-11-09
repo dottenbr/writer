@@ -48,6 +48,8 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
     book: <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Zm0 15A2.5 2.5 0 0 0 6.5 23H20v-5" />,
     chevron: <path d="m9 6 6 6-6 6" />,
+    back: <path d="m15 6-6 6 6 6" />,
+    feather: <><path d="M20 4c-6 0-12 4-13.5 11.5L5 20" /><path d="M20 4c0 7-5 12-12 12" /><path d="M9 15h5" /></>,
     down: <path d="m6 9 6 6 6-6" />,
     search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>,
     plus: <path d="M12 5v14M5 12h14" />,

@@ -10,6 +10,15 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: s
   componentDidCatch(error: Error) { console.error("[bookkit] view error", error); }
   render() {
     if (!this.state.error) return this.props.children;
+    if (/dynamically imported module|Importing a module script failed|Loading chunk/i.test(this.state.error.message)) {
+      return (
+        <div className="view-error" role="alert">
+          <h2>Bookkit was updated</h2>
+          <p>Reload to use the new version. Your saved work is safe.</p>
+          <button className="btn btn-primary" onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      );
+    }
     return (
       <div className="view-error" role="alert">
         <h2>Something went wrong showing this page</h2>

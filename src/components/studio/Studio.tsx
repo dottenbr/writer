@@ -9,13 +9,30 @@ import { CompanionView } from "./CompanionView";
 import { ContextPanel } from "./ContextPanel";
 import { Toolbar } from "./Toolbar";
 import { BibleBoard, PlanBoard } from "./Boards";
+import { EntityIndex, EntityPage } from "./BiblePages";
+import { bookIdForSlug, bookSlug, FULL_PAGE, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { chapterForPath, Icon, initials, KIND_LABEL, useAccess } from "./common";
-import { anchorNumbers, nextChapterPath } from "../../lib/book-model";
+import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } from "./common";
+import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
 import { saveBookDocument, createBook, setAccountPassword } from "../../lib/supabase-service";
 
-const BookSettings = lazy(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
-const Inspiration = lazy(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
+/**
+ * Lazy views. After a new release the old chunk files are gone, so a tab that
+ * was open across a deploy reloads once to pick up the new ones.
+ */
+function lazyView<T>(load: () => Promise<T>) {
+  return lazy(() => load().catch(error => {
+    if (/dynamically imported module|Importing a module script failed|Loading chunk/i.test(String(error?.message ?? error))) {
+      try {
+        const last = Number(sessionStorage.getItem("bookkit-chunk-reload") ?? 0);
+        if (Date.now() - last > 30000) { sessionStorage.setItem("bookkit-chunk-reload", String(Date.now())); window.location.reload(); return new Promise<never>(() => {}); }
+      } catch { /* storage unavailable */ }
+    }
+    throw error;
+  }) as Promise<any>);
+}
+const BookSettings = lazyView(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
+const Inspiration = lazyView(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
 import { BriefPage } from "./BriefPage";
 
 export function useTheme() {
@@ -231,6 +248,154 @@ function HoverCard() {
   );
 }
 
+
+type MenuEntry = { label: string; run: () => void; meta?: string; active?: boolean; dot?: string; num?: number } | { heading: string } | { sep: true };
+
+/** The sections of the book, each with a menu of what's in it. */
+function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
+  const model = useBookStore(s => s.model)!;
+  const view = useBookStore(s => s.view);
+  const location = useBookStore(s => s.location);
+  const go = useBookStore(s => s.go);
+  const setView = useBookStore(s => s.setView);
+  const { isOwner } = useAccess();
+  const [open, setOpen] = useState<string | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>();
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(null); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  useEffect(() => { setOpen(null); clearTimeout(hoverTimer.current); }, [location.nonce, view]);
+
+  const section = view === "write" ? (location.path.startsWith("craft/") ? "craft" : location.path.startsWith("research/") ? "research" : "write") : view;
+  const docs = (group: string) => model.companions.filter(d => d.group === group && !d.isAsset);
+  const entityFiles = model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path);
+  const pageEntry = (d: { path: string; title: string }, meta?: string): MenuEntry => ({ label: d.title, meta, run: () => go(d.path), active: location.path === d.path });
+  const research = docs("research");
+  const researchFolders = [...new Set(research.map(d => d.path.split("/").slice(1, -1).join("/")))];
+
+  const menus: Array<{ id: string; label: string; icon: string; run: () => void; items: MenuEntry[] }> = [
+    { id: "write", label: "Manuscript", icon: "pen", run: () => setView("write"), items: [
+      { label: "Title page", run: () => go(""), active: view === "write" && location.path === "" },
+      { heading: `Chapters · ${model.chapters.length}` },
+      ...model.chapters.map(c => ({ label: c.title || `Chapter ${c.number}`, num: c.number, dot: chapterState(c).key, run: () => go(c.authorPath ?? c.currentPath), active: chapterForPath(model.chapters, location.path)?.number === c.number })),
+      ...(isOwner ? [{ sep: true } as const, { label: "New chapter…", run: onNewChapter }] : []),
+    ] },
+    { id: "plan", label: "Plan", icon: "grid", run: () => setView("plan"), items: [
+      { label: "Brief", run: () => go("@brief"), active: location.path === "@brief" },
+      { label: "All chapters", meta: String(model.chapters.length), run: () => go("", { view: "plan" }), active: view === "plan" && !location.path },
+      ...(docs("plan").length ? [{ heading: "Planning pages" } as const, ...docs("plan").map(d => pageEntry(d))] : []),
+    ] },
+    { id: "bible", label: "Bible", icon: "person", run: () => setView("bible"), items: [
+      { label: "Overview", meta: String(model.entities.length), run: () => go("", { view: "bible" }), active: view === "bible" && !location.path },
+      ...(entityFiles.length ? [{ heading: "Cards" } as const, ...entityFiles.map(p => ({ label: model.companions.find(d => d.path === p)?.title ?? p, meta: String(model.entities.filter(e => e.path === p).length), run: () => go(p, { view: "bible" }), active: location.path === p }))] : []),
+      ...(() => { const pages = [...docs("story"), ...docs("bible")].filter(d => !entityFiles.includes(d.path)); return pages.length ? [{ heading: "Pages" } as const, ...pages.map(d => pageEntry(d))] : []; })(),
+    ] },
+    ...(docs("craft").length ? [{ id: "craft", label: "Craft", icon: "feather", run: () => go(docs("craft")[0].path), items: docs("craft").map(d => pageEntry(d)) }] : []),
+    ...(research.length ? [{ id: "research", label: "Research", icon: "search", run: () => go(research[0].path), items: researchFolders.flatMap(folder => {
+      const inFolder = research.filter(d => d.path.split("/").slice(1, -1).join("/") === folder);
+      return [...(folder ? [{ heading: folder.replace(/[-_]/g, " ").replace(/\//g, " › ") } as const] : []), ...inFolder.map(d => pageEntry(d))];
+    }) }] : []),
+  ];
+
+  return (
+    <nav className="menubar" aria-label="Book" ref={ref} onMouseLeave={() => clearTimeout(hoverTimer.current)}>
+      {menus.map(m => (
+        <div key={m.id} className={`menubar-item ${section === m.id ? "on" : ""} ${open === m.id ? "open" : ""}`}
+          onMouseEnter={() => { clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setOpen(m.id), open ? 0 : 220); }}
+          onMouseLeave={() => { clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setOpen(o => (o === m.id ? null : o)), 260); }}>
+          <button className="menubar-btn" onClick={() => { setOpen(null); m.run(); }}><Icon name={m.icon} size={15} /> <span className="menubar-label">{m.label}</span></button>
+          <button className="menubar-caret" aria-label={`${m.label} menu`} aria-expanded={open === m.id} onClick={() => setOpen(open === m.id ? null : m.id)}><Icon name="down" size={12} /></button>
+          {open === m.id && (
+            <div className="menu menubar-menu" role="menu">
+              {m.items.map((it, i) => "sep" in it ? <div key={i} className="menu-sep" /> : "heading" in it ? <div key={i} className="menu-label">{it.heading}</div> : (
+                <button key={i} role="menuitem" className={`menu-item ${it.active ? "current" : ""}`} onClick={() => { setOpen(null); it.run(); }}>
+                  {it.num != null && <span className="menu-num">{it.num}</span>}
+                  {it.dot && <span className={`status-dot ${it.dot}`} />}
+                  <span className="menu-item-text">{it.label}</span>
+                  {it.meta && <span className="menu-meta">{it.meta}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      <div className={`menubar-item ${view === "inspiration" ? "on" : ""}`}>
+        <button className="menubar-btn solo" onClick={() => setView("inspiration")}><Icon name="image" size={15} /> <span className="menubar-label">Inspiration</span></button>
+      </div>
+    </nav>
+  );
+}
+
+let firstUrlSync = true;
+
+/** Keep the address bar in step with what's on screen, and follow back/forward. */
+function useUrlSync() {
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const switchProject = useProjectStore(s => s.switchProject);
+  const bookProject = useBookStore(s => s.projectId);
+  const model = useBookStore(s => s.model);
+  const view = useBookStore(s => s.view);
+  const location = useBookStore(s => s.location);
+  const visibleChapter = useBookStore(s => s.visibleChapter);
+  const applied = useRef<string | null>(null);
+  const justApplied = useRef(false);
+
+  // Opening a book: show the place the address names, if it names this book.
+  useEffect(() => {
+    if (!model || !bookProject || applied.current === bookProject) return;
+    applied.current = bookProject;
+    if (bookIdForSlug(catalog, urlBookSlug()) === bookProject) {
+      const route = urlToRoute(window.location.pathname, window.location.hash, model);
+      if (route) { justApplied.current = true; useBookStore.getState().applyRoute(route); }
+    }
+  }, [model, bookProject, catalog]);
+
+  // What's on screen → address bar.
+  useEffect(() => {
+    if (!model || !bookProject || applied.current !== bookProject) return;
+    const first = firstUrlSync;
+    firstUrlSync = false;
+    // The route from the address is being applied; this run still sees the old location.
+    if (justApplied.current) { justApplied.current = false; return; }
+    const url = routeToUrl(bookSlug(catalog, bookProject), { view, path: location.path, anchor: location.anchor }, model);
+    if (url === window.location.pathname + window.location.hash) return;
+    if (first || window.location.pathname === "/") window.history.replaceState(null, "", url);
+    else window.history.pushState(null, "", url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, location.nonce, bookProject, applied.current, model ? 1 : 0]);
+
+  // Scrolling through the manuscript keeps the address on the chapter you're reading.
+  useEffect(() => {
+    if (!model || !bookProject || view !== "write" || !visibleChapter || !location.path) return;
+    if (!chapterForPath(model.chapters, location.path)) return;
+    const c = model.chapters.find(x => x.number === visibleChapter);
+    if (!c) return;
+    const url = routeToUrl(bookSlug(catalog, bookProject), { view: "write", path: c.authorPath ?? c.currentPath }, model);
+    if (url !== window.location.pathname + window.location.hash) window.history.replaceState(null, "", url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleChapter]);
+
+  // Back and forward.
+  useEffect(() => {
+    const onPop = () => {
+      const id = bookIdForSlug(catalog, urlBookSlug());
+      const book = useBookStore.getState();
+      if (id && id !== book.projectId) { void switchProject(id); return; }
+      if (!book.model) return;
+      const route = urlToRoute(window.location.pathname, window.location.hash, book.model);
+      if (route) book.applyRoute(route);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [catalog, switchProject]);
+}
+
 function Presence() {
   const editors = useProjectStore(s => s.activeEditors);
   const userId = useAuthStore(s => s.userId);
@@ -333,6 +498,7 @@ export function Studio() {
   }, [location.nonce]);
   const [theme, setTheme] = useTheme();
   const { role } = useAccess();
+  useUrlSync();
 
   useEffect(() => { if (projectId) void load(projectId); }, [projectId, load]);
   useEffect(() => {
@@ -401,16 +567,29 @@ export function Studio() {
   if (status === "error") return <div className="studio-message"><h2>We couldn’t open this book</h2><p>{error}</p><button className="btn" onClick={() => projectId && void load(projectId)}>Try again</button></div>;
   if (!model) return <div className="studio-message"><span className="spinner" /> Opening your book…</div>;
 
-  const isChapter = location.path === "" || !!chapterForPath(model.chapters, location.path);
-  const views: Array<{ id: View; label: string; icon: string }> = [
-    { id: "write", label: "Write", icon: "pen" },
-    { id: "plan", label: "Plan", icon: "grid" },
-    { id: "bible", label: "Bible", icon: "person" },
-    { id: "inspiration", label: "Inspiration", icon: "image" },
-  ];
+  const path = location.path;
+  const isChapter = path === "" || !!chapterForPath(model.chapters, path);
+  const entityFile = !!entityKindForPath(path);
+  let content: React.ReactNode = null;
+  let isDoc = false;
+  if (view === "write") {
+    content = path === "@brief" ? <BriefPage /> : isChapter ? <ManuscriptView /> : <CompanionView />;
+    isDoc = path !== "@brief";
+  } else if (view === "plan") {
+    content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : <CompanionView />;
+    isDoc = !!path && path !== "@brief";
+  } else if (view === "bible") {
+    if (!path) content = <BibleBoard />;
+    else if (entityFile && location.anchor && location.anchor !== FULL_PAGE) content = <EntityPage path={path} slug={location.anchor} />;
+    else if (entityFile && !location.anchor) content = <EntityIndex path={path} />;
+    else content = <CompanionView />;
+    isDoc = !!path && (!entityFile || !!location.anchor);
+  }
+  const scope = view === "write" || view === "plan" || view === "bible" ? view : null;
+  const showPanel = isDoc || (view === "write" && path !== "@brief");
 
   return (
-    <div className={`studio ${focusMode ? "focus" : ""} ${navOpen ? "" : "nav-closed"} ${panelOpen && view === "write" ? "" : "panel-closed"}`}>
+    <div className={`studio ${focusMode ? "focus" : ""} ${navOpen && scope ? "" : "nav-closed"} ${panelOpen && showPanel ? "" : "panel-closed"}`}>
       <header className="topbar">
         <div className="topbar-left">
           <button className="icon-btn" onClick={() => setNavOpen(!navOpen)} aria-label={navOpen ? "Hide contents" : "Show contents"} title="Contents"><Icon name="sidebar" size={18} /></button>
@@ -418,11 +597,7 @@ export function Studio() {
           <span className="topbar-slash">/</span>
           <BookSwitcher />
         </div>
-        <nav className="view-switch" aria-label="Views">
-          {views.map(v => (
-            <button key={v.id} className={view === v.id ? "on" : ""} onClick={() => setView(v.id)}><Icon name={v.icon} size={15} /> {v.label}</button>
-          ))}
-        </nav>
+        <MenuBar onNewChapter={() => setNewChapter(true)} />
         <div className="topbar-right">
           <button className="search-trigger" onClick={() => setPalette(true)}><Icon name="search" size={14} /> <span>Jump to…</span> <kbd>⌘K</kbd></button>
           <span className={`live-dot ${live === "SUBSCRIBED" ? "on" : ""}`} title={live === "SUBSCRIBED" ? "Live: changes from collaborators appear as they save" : "Reconnecting…"} />
@@ -432,20 +607,18 @@ export function Studio() {
         </div>
       </header>
       <div className="studio-body" onClick={onClick}>
-        {view === "write" && navOpen && <Navigator onNewChapter={() => setNewChapter(true)} />}
+        {scope && navOpen && <Navigator scope={scope} onNewChapter={() => setNewChapter(true)} />}
         <main className="studio-main">
-          {view === "write" && location.path !== "@brief" && <Toolbar />}
+          {isDoc && <Toolbar />}
           <div className="main-scroll">
             <ErrorBoundary resetKey={`${view}:${location.path}:${location.nonce}`}>
-              {view === "write" && (location.path === "@brief" ? <BriefPage /> : isChapter ? <ManuscriptView /> : <CompanionView />)}
+              {content}
               {view === "inspiration" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><div className="inspiration-host"><Inspiration /></div></Suspense>}
-              {view === "plan" && <PlanBoard />}
-              {view === "bible" && <BibleBoard />}
               {view === "settings" && <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}><BookSettings /></Suspense>}
             </ErrorBoundary>
           </div>
         </main>
-        {view === "write" && panelOpen && <ErrorBoundary resetKey={location.path}><ContextPanel /></ErrorBoundary>}
+        {showPanel && panelOpen && <ErrorBoundary resetKey={location.path}><ContextPanel /></ErrorBoundary>}
       </div>
       {focusMode && <button className="focus-exit" onClick={() => setFocusMode(false)}>Exit focus · Esc</button>}
       {palette && <CommandPalette onClose={() => setPalette(false)} />}

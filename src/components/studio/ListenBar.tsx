@@ -1,4 +1,4 @@
-import { SPEEDS, useListenStore, VOICES } from "../../store/useListenStore";
+import { SPEEDS, useListenStore, VOICES, type SleepTimerOption } from "../../store/useListenStore";
 import { Icon } from "./common";
 
 /** The player while a chapter is being read aloud. Lock-screen controls work too. */
@@ -24,6 +24,15 @@ export function ListenBar() {
       <div className="listen-options">
         <select value={s.rate} onChange={e => s.setRate(Number(e.target.value))} aria-label="Speed">{SPEEDS.map(r => <option key={r} value={r}>{r}×</option>)}</select>
         <select value={s.voice} onChange={e => s.setVoice(e.target.value)} aria-label="Voice">{VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</select>
+        <select value={s.sleepTimer} onChange={e => s.setSleepTimer(e.target.value as SleepTimerOption)} aria-label="Sleep timer" title="Sleep timer">
+          <option value="off">Sleep: Off</option>
+          <option value="15">Sleep: 15m</option>
+          <option value="30">Sleep: 30m</option>
+          <option value="chapter">End of chapter</option>
+        </select>
+        <button className="icon-btn" onClick={() => void s.downloadChapter()} disabled={s.downloading} aria-label="Download chapter audio" title="Download chapter MP3">
+          {s.downloading ? <span className="spinner tiny" /> : <Icon name="download" size={15} />}
+        </button>
         <label className="listen-follow" title="Scroll along with the reading"><input type="checkbox" checked={s.follow} onChange={e => s.setFollow(e.target.checked)} /> Follow</label>
         <button className="icon-btn" onClick={s.stop} aria-label="Stop reading" title="Stop"><Icon name="close" size={15} /></button>
       </div>

@@ -290,11 +290,13 @@ async function transcribe(request:Request,env:Env,url:URL):Promise<Response>{
  let polished=false;
  if(body?.polish!==false&&text.length<6000){
   try{
+   const maxTokens=Math.min(2048,Math.max(256,Math.ceil(text.length/2)+128));
    const out=await env.AI!.run(POLISH_MODEL,{messages:[
-    {role:'system',content:'You fix the punctuation of a passage a novelist dictated. Fix only punctuation, capital letters and paragraph breaks. Do not change, add, remove, reorder or correct any word, including grammar or spelling. Dialogue gets quotation marks. Return only the passage.'},
-    {role:'user',content:text}],max_tokens:4096});
+    {role:'system',content:'You fix the punctuation of a passage a novelist dictated. Fix only punctuation and capital letters. Preserve existing line and paragraph breaks exactly; never add new paragraph breaks. Do not change, add, remove, reorder or correct any word, including grammar or spelling. Dialogue gets quotation marks. Return only the passage.'},
+    {role:'user',content:text}],max_tokens:maxTokens,temperature:0,reasoning_effort:'low'});
    const raw=out?.choices?.[0]?.message?.content??out?.response??'';
-   const candidate=String(raw).replace(/^\s*<think>[\s\S]*?<\/think>\s*/,'').trim();
+   let candidate=String(raw).replace(/^\s*<think>[\s\S]*?<\/think>\s*/,'').trim();
+   if(!/\n{2,}/.test(text)&&/\n{2,}/.test(candidate))candidate=candidate.replace(/\s*\n{2,}\s*/g,' ');
    if(candidate&&onlyPunctuationChanged(text,candidate)){text=candidate;polished=true;}
   }catch{/* keep the unpolished text */}
  }

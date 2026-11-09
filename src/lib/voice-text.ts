@@ -105,10 +105,13 @@ export function applyHouseStyle(text: string, style: HouseStyle = {}): string {
 /** The words of a text, ignoring case and punctuation. */
 const wordsOf = (t: string) => (t.toLowerCase().match(/[\p{L}\p{N}]+(?:['’][\p{L}]+)?/gu) ?? []).map(w => w.replace(/’/g, "'"));
 
-/** Whether a tidied transcript only changed punctuation, capitals and spacing. */
+/** Whether a tidied transcript only changed punctuation, capitals and spacing, without inventing paragraph breaks. */
 export function onlyPunctuationChanged(before: string, after: string): boolean {
   const a = wordsOf(before), b = wordsOf(after);
-  return a.length === b.length && a.every((w, i) => w === b[i]);
+  if (a.length !== b.length || !a.every((w, i) => w === b[i])) return false;
+  const beforeParas = before.trim().split(/\n{2,}/).length;
+  const afterParas = after.trim().split(/\n{2,}/).length;
+  return afterParas === beforeParas;
 }
 
 /** Text to read aloud, in chunks of whole paragraphs (the last chunk may be one long paragraph). */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyHouseStyle, applySpokenCommands, correctVoiceTerms, onlyPunctuationChanged, readingChunks, voiceVocabulary } from "./voice-text";
+import { extractReadableBlocksFromBody } from "../store/useListenStore";
 
 describe("dictation", () => {
   const vocab = voiceVocabulary(["Nora", "The Owl", "Agathe", "Ennet"], ["Gerold waited by the well."]);
@@ -23,10 +24,12 @@ describe("dictation", () => {
     expect(applyHouseStyle(`"No," she said.`, { quotes: "single" })).toBe(`‘No,’ she said.`);
     expect(applyHouseStyle(`wait -- now`, { dashes: "en-spaced" })).toBe(`wait – now`);
   });
-  it("only accepts a tidy-up that keeps every spoken word", () => {
+  it("only accepts a tidy-up that keeps every spoken word and does not invent paragraph breaks", () => {
     expect(onlyPunctuationChanged("she said come back and he left", "She said, “Come back,” and he left.")).toBe(true);
     expect(onlyPunctuationChanged("she said come back", "She said, “Come back quickly.”")).toBe(false);
     expect(onlyPunctuationChanged("dont go", "Don’t go.")).toBe(false);
+    expect(onlyPunctuationChanged("she said come back and he left", "She said, “Come back.”\n\nAnd he left.")).toBe(false);
+    expect(onlyPunctuationChanged("she said come back\n\nand he left", "She said, “Come back.”\n\nAnd he left.")).toBe(true);
   });
 });
 
@@ -41,6 +44,16 @@ describe("reading aloud", () => {
     expect(chunks.length).toBeGreaterThan(3);
     expect(chunks.every(c => c.text.length <= 400 && c.first === 0)).toBe(true);
     expect(chunks.slice(0, -1).every(c => c.text.endsWith("."))).toBe(true);
+  });
+  it("extracts paragraphs, list items, and blockquotes in exact DOM order so read-aloud highlighting stays aligned", () => {
+    const md = `## Scene 1 – Morning\n\nFirst paragraph.\n\n- Bullet one\n- Bullet two\n\n> Quoted line\n\nFinal paragraph.\n`;
+    expect(extractReadableBlocksFromBody(md)).toEqual([
+      "First paragraph.",
+      "Bullet one",
+      "Bullet two",
+      "Quoted line",
+      "Final paragraph.",
+    ]);
   });
 });
 

@@ -214,7 +214,14 @@ kbd { font-family: var(--ui); font-size: 11px; color: var(--ink-3); border: 1px 
 .part-divider { width: min(var(--page-w), 100%); margin: 36px auto 30px; display: flex; align-items: center; gap: 16px; color: var(--ink-3); font: 600 12px var(--ui); letter-spacing: .14em; text-transform: uppercase; }
 .part-divider::before, .part-divider::after { content: ""; flex: 1; height: 1px; background: var(--line-2); }
 
-.title-page { text-align: center; padding: 48px 0 24px; }
+.title-page { position: relative; overflow: hidden; text-align: center; padding: 48px 0 24px; border-radius: 10px; }
+.title-page.has-bg { padding: 56px 28px 28px; margin: -24px -32px 0; }
+.title-page-bg { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0.14; filter: saturate(0.85) contrast(0.96); mask-image: radial-gradient(ellipse 90% 85% at 50% 42%, rgba(0,0,0,1) 25%, rgba(0,0,0,0.45) 70%, transparent 100%); -webkit-mask-image: radial-gradient(ellipse 90% 85% at 50% 42%, rgba(0,0,0,1) 25%, rgba(0,0,0,0.45) 70%, transparent 100%); pointer-events: none; transition: background-image 0.3s ease; }
+:root[data-theme="dark"] .title-page-bg { opacity: 0.18; }
+.title-page-content { position: relative; z-index: 1; }
+.title-page-mood { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 22px; font: 12px var(--ui); color: var(--ink-3); flex-wrap: wrap; }
+.title-page-mood-caption { font-size: 12px; color: var(--ink-3); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-page-shuffle { height: 26px !important; padding: 0 10px !important; font-size: 12px !important; gap: 5px; background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(6px); }
 .title-page-eyebrow { font: 600 11.5px var(--ui); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
 .title-page-title { font: 500 56px/1.05 var(--display); margin: 18px 0 10px; color: var(--ink); letter-spacing: -0.01em; }
 .title-page-author { font: italic 20px var(--display); color: var(--ink-2); }
@@ -971,8 +978,10 @@ input.tl-period-title:focus { background: var(--surface); box-shadow: 0 0 0 2px 
 .ws-book:hover { box-shadow: var(--shadow-page); border-color: var(--line-2); transform: translateY(-1px); }
 .ws-book.featured { grid-column: span 2; border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .ws-book-top { display: flex; gap: 14px; align-items: center; }
-.ws-cover { width: 44px; height: 58px; border-radius: 4px 7px 7px 4px; background: linear-gradient(135deg, var(--ink) 0%, color-mix(in srgb, var(--ink) 70%, var(--accent)) 100%); display: grid; place-items: center; flex: none; box-shadow: inset 3px 0 0 rgba(255,255,255,.12), 0 2px 6px rgba(0,0,0,.12); }
-.ws-cover span { font: italic 600 22px var(--display); color: var(--surface); }
+.ws-cover { width: 48px; height: 64px; border-radius: 4px 7px 7px 4px; background: linear-gradient(135deg, var(--ink) 0%, color-mix(in srgb, var(--ink) 70%, var(--accent)) 100%); background-size: cover; background-position: center; display: grid; place-items: center; flex: none; box-shadow: inset 3px 0 0 rgba(255,255,255,.16), 0 2px 6px rgba(0,0,0,.14); position: relative; overflow: hidden; }
+.ws-cover span { font: italic 600 22px var(--display); color: var(--surface); position: relative; z-index: 1; line-height: 1; }
+.ws-cover.has-art[data-tone="light"] span { color: #141312; text-shadow: 0 1px 6px rgba(255,255,255,.92), 0 0 2px rgba(255,255,255,.98); }
+.ws-cover.has-art[data-tone="dark"] span { color: #ffffff; text-shadow: 0 1px 6px rgba(0,0,0,.88), 0 0 2px rgba(0,0,0,.96); }
 .ws-book-head { min-width: 0; flex: 1; }
 .ws-book-title { font: 600 21px/1.2 var(--display); overflow: hidden; text-overflow: ellipsis; }
 .ws-book.featured .ws-book-title { font-size: 26px; }
@@ -1227,8 +1236,12 @@ html[data-prose-font="dyslexic"] .doc-prose { line-height: 1.92; letter-spacing:
 .insp-empty-card p { max-width: 440px; margin: 0 0 8px; font: 14px/1.55 var(--ui); }
 .insp-studio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
 .insp-studio-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.insp-studio-card.is-cover-card { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .insp-studio-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-page); }
-.insp-studio-preview { border: 0; background: var(--surface-2); height: 170px; width: 100%; padding: 0; cursor: pointer; display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid var(--line); }
+.insp-studio-preview { position: relative; border: 0; background: var(--surface-2); height: 170px; width: 100%; padding: 0; cursor: pointer; display: grid; place-items: center; overflow: hidden; border-bottom: 1px solid var(--line); }
+.insp-cover-badge { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 6px; font: 600 11px/1.4 var(--ui); letter-spacing: .04em; text-transform: uppercase; backdrop-filter: blur(6px); }
+.insp-cover-badge[data-tone="light"] { background: rgba(255,255,255,.78); color: #141312; text-shadow: 0 1px 2px rgba(255,255,255,.9); }
+.insp-cover-badge[data-tone="dark"] { background: rgba(20,19,18,.72); color: #ffffff; text-shadow: 0 1px 2px rgba(0,0,0,.85); }
 .insp-studio-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .insp-file-badge { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--ink-3); font: 600 11px var(--ui); letter-spacing: .08em; }
 .insp-studio-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
@@ -1243,6 +1256,8 @@ html[data-prose-font="dyslexic"] .doc-prose { line-height: 1.92; letter-spacing:
 .insp-add-tag-btn { font-size: 12px; }
 .insp-studio-notes { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: 13px/1.45 var(--ui); background: var(--surface-2); color: var(--ink); resize: vertical; }
 .insp-studio-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.insp-studio-foot-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.insp-cover-btn.active { font-weight: 600; color: var(--accent-ink); }
 .link-btn.danger { color: var(--danger); }
 .insp-lightbox-backdrop { z-index: 90; }
 .insp-lightbox-modal { width: min(960px, 94vw); max-height: 90vh; background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden; }

@@ -1,6 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { getInspirationUrl } from "../lib/supabase-service";
+import {
+  applyCoverTags,
+  clearCachedCover,
+  coverToneFromTags,
+  generateAndCacheCoverThumbnail,
+  inverseTextColorForTone,
+  isCoverTag,
+  pickBookCoverItem,
+  readCachedCover,
+  visibleInspirationTags,
+  type CoverTone,
+} from "../lib/cover-art";
 import type { InspirationItem } from "../types";
 import { Icon } from "./studio/common";
 
@@ -81,6 +93,9 @@ function InspirationCard({
   item,
   projectId,
   canEdit,
+  isCover,
+  isExplicitCover,
+  onSetCover,
   onDelete,
   onUpdate,
   onPreview,
@@ -90,6 +105,9 @@ function InspirationCard({
   item: InspirationItem;
   projectId: string;
   canEdit: boolean;
+  isCover: boolean;
+  isExplicitCover: boolean;
+  onSetCover: (item: InspirationItem) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string, updates: Partial<InspirationItem>) => void;
   onPreview: (item: InspirationItem) => void;
@@ -97,12 +115,29 @@ function InspirationCard({
   onRemoveTag: (id: string, tag: string) => void;
 }) {
   const thumb = useThumbnail(projectId, item);
+  const [tone, setTone] = useState<CoverTone>(() => {
+    const cached = readCachedCover(projectId, item.fileName);
+    return cached?.tone ?? coverToneFromTags(item.tags) ?? "dark";
+  });
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(item.label);
   const [showNotes, setShowNotes] = useState(Boolean(item.notes));
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    if (!isCover || !thumb) return;
+    let live = true;
+    generateAndCacheCoverThumbnail(projectId, item.fileName, thumb, coverToneFromTags(item.tags))
+      .then((res) => {
+        if (live && res) setTone(res.tone);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [isCover, thumb, projectId, item.fileName, item.tags]);
 
   const commitLabel = () => {
     const trimmed = labelDraft.trim();
@@ -118,13 +153,25 @@ function InspirationCard({
     setAddingTag(false);
   };
 
+  const userTags = visibleInspirationTags(item.tags);
+  const badgeColor = inverseTextColorForTone(tone);
+
   return (
-    <article className="insp-studio-card">
+    <article className={`insp-studio-card ${isCover ? "is-cover-card" : ""}`}>
       <button type="button" className="insp-studio-preview" onClick={() => onPreview(item)} aria-label={`Preview ${item.label}`}>
         {thumb ? (
           <img src={thumb} alt={item.label} className="insp-studio-img" loading="lazy" />
         ) : (
           <FileTypeBadge fileName={item.fileName} />
+        )}
+        {isCover && (
+          <span
+            className="insp-cover-badge"
+            data-tone={tone}
+            style={{ color: badgeColor }}
+          >
+            Cover
+          </span>
         )}
       </button>
       <div className="insp-studio-body">
@@ -159,7 +206,7 @@ function InspirationCard({
         </div>
 
         <div className="insp-studio-tags">
-          {item.tags.map((tag) => (
+          {userTags.map((tag) => (
             <span key={tag} className="chip insp-chip">
               {tag}
               {canEdit && (
@@ -208,9 +255,21 @@ function InspirationCard({
         )}
 
         <div className="insp-studio-foot">
-          <button type="button" className="link-btn" onClick={() => setShowNotes(!showNotes)}>
-            {showNotes ? "Hide notes" : item.notes ? "Edit notes" : "+ Add notes"}
-          </button>
+          <div className="insp-studio-foot-left">
+            <button type="button" className="link-btn" onClick={() => setShowNotes(!showNotes)}>
+              {showNotes ? "Hide notes" : item.notes ? "Edit notes" : "+ Add notes"}
+            </button>
+            {canEdit && isImage(item.fileName) && (
+              <button
+                type="button"
+                className={`link-btn insp-cover-btn ${isExplicitCover ? "active" : ""}`}
+                onClick={() => onSetCover(item)}
+                title={isExplicitCover ? "Pinned as the shelf cover image" : "Use this image as the book cover on the library shelf"}
+              >
+                {isExplicitCover ? "Cover image ✓" : "Set as cover"}
+              </button>
+            )}
+          </div>
           {canEdit && (
             confirmDelete ? (
               <span className="confirm-inline">
@@ -233,12 +292,18 @@ function Lightbox({
   items,
   currentIndex,
   projectId,
+  canEdit,
+  coverId,
+  onSetCover,
   onClose,
   onNavigate,
 }: {
   items: InspirationItem[];
   currentIndex: number;
   projectId: string;
+  canEdit: boolean;
+  coverId: string | null;
+  onSetCover: (item: InspirationItem) => void;
   onClose: () => void;
   onNavigate: (index: number) => void;
 }) {
@@ -246,6 +311,7 @@ function Lightbox({
   const [url, setUrl] = useState<string | null>(null);
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < items.length - 1;
+  const isCurrentCover = coverId === item.id;
 
   useEffect(() => {
     let cancelled = false;
@@ -279,6 +345,15 @@ function Lightbox({
             <span className="muted"> · {item.fileName} ({currentIndex + 1} of {items.length})</span>
           </div>
           <div className="insp-lightbox-actions">
+            {canEdit && isImage(item.fileName) && (
+              <button
+                type="button"
+                className={`btn btn-sm ${isCurrentCover ? "btn-primary" : ""}`}
+                onClick={() => onSetCover(item)}
+              >
+                {isCurrentCover ? "Cover image ✓" : "Set as cover"}
+              </button>
+            )}
             {hasPrev && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex - 1)}>Previous</button>}
             {hasNext && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex + 1)}>Next</button>}
             {url && <a className="btn btn-sm" href={url} target="_blank" rel="noopener noreferrer">Open original</a>}
@@ -323,7 +398,9 @@ export function Inspiration() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const allTags = Array.from(new Set(inspirationItems.flatMap((i) => i.tags))).sort();
+  const allTags = Array.from(new Set(inspirationItems.flatMap((i) => visibleInspirationTags(i.tags)))).sort();
+  const activeCover = pickBookCoverItem(inspirationItems);
+  const coverItemId = activeCover?.item.id ?? null;
 
   const displayed = inspirationItems.filter((item) => {
     if (filterTag && !item.tags.includes(filterTag)) return false;
@@ -334,6 +411,38 @@ export function Inspiration() {
 
   const existingFileNames = new Set(inspirationItems.map((i) => i.fileName));
   const hasActiveFilters = filterTag !== null || filterType !== "all" || searchQuery !== "";
+
+  const handleSetCover = useCallback(
+    (item: InspirationItem) => {
+      if (!canEdit || !isImage(item.fileName)) return;
+      const alreadyPinned = item.tags.includes("cover");
+      if (alreadyPinned) {
+        updateInspirationItem(item.id, { tags: applyCoverTags(item.tags, false) });
+        if (projectId) clearCachedCover(projectId);
+        return;
+      }
+      for (const other of inspirationItems) {
+        if (other.id !== item.id && other.tags.some(isCoverTag)) {
+          updateInspirationItem(other.id, { tags: applyCoverTags(other.tags, false) });
+        }
+      }
+      const existingTone = coverToneFromTags(item.tags);
+      updateInspirationItem(item.id, { tags: applyCoverTags(item.tags, true, existingTone) });
+      if (!projectId) return;
+      getInspirationUrl(projectId, item.fileName)
+        .then((signedUrl) => {
+          if (!signedUrl) return null;
+          return generateAndCacheCoverThumbnail(projectId, item.fileName, signedUrl, existingTone);
+        })
+        .then((result) => {
+          if (result) {
+            updateInspirationItem(item.id, { tags: applyCoverTags(item.tags, true, result.tone) });
+          }
+        })
+        .catch(() => {});
+    },
+    [canEdit, inspirationItems, projectId, updateInspirationItem]
+  );
 
   const handleAddViaInput = useCallback(
     async (fileList: FileList) => {
@@ -534,6 +643,9 @@ export function Inspiration() {
               item={item}
               projectId={projectId}
               canEdit={canEdit}
+              isCover={coverItemId === item.id}
+              isExplicitCover={item.tags.includes("cover")}
+              onSetCover={handleSetCover}
               onDelete={(id) => void removeInspirationItem(id)}
               onUpdate={(id, updates) => updateInspirationItem(id, updates)}
               onPreview={handlePreview}
@@ -549,6 +661,9 @@ export function Inspiration() {
           items={displayed}
           currentIndex={previewIndex}
           projectId={projectId}
+          canEdit={canEdit}
+          coverId={coverItemId}
+          onSetCover={handleSetCover}
           onClose={() => setPreviewIndex(null)}
           onNavigate={setPreviewIndex}
         />

@@ -9,6 +9,7 @@ import { AUTH_STORAGE_KEY, supabase } from "./supabase-client";
 import { cookieStorage } from "./cookie-storage";
 import { policy as policyDefinition, syncPolicy } from "./policy-blocks";
 import { STYLE_KEYS } from "./book-config";
+import { pickBookCoverItem, type CoverTone } from "./cover-art";
 import type {
   Project,
   ProjectAct,
@@ -1211,11 +1212,18 @@ export async function removeInspirationItem(projectId: string, itemId: string): 
   await supabase.from("inspiration_items").delete().eq("id", itemId);
 }
 
+const signedInspirationUrls = new Map<string, { url: string; expiresAt: number }>();
+
 export async function getInspirationUrl(projectId: string, fileName: string): Promise<string> {
+  const key = `${projectId}/${fileName}`;
+  const cached = signedInspirationUrls.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.url;
   const { data } = await supabase.storage
     .from("inspiration")
-    .createSignedUrl(`${projectId}/${fileName}`, 3600);
-  return data?.signedUrl ?? "";
+    .createSignedUrl(key, 3600);
+  const url = data?.signedUrl ?? "";
+  if (url) signedInspirationUrls.set(key, { url, expiresAt: Date.now() + 45 * 60 * 1000 });
+  return url;
 }
 
 export async function updateInspirationItem(
@@ -2088,13 +2096,51 @@ export interface WorkspaceBook {
   library_id: string | null;
   shelf_id: string | null;
   private: boolean;
+  cover_file?: string | null;
+  cover_tone?: CoverTone | null;
 }
 
 /** Every book you can open, with progress and daily activity for the workspace. */
 export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
-  const { data, error } = await supabase.rpc('bookkit_workspace', { p_days: days });
+  const [{ data, error }, inspRes] = await Promise.all([
+    supabase.rpc("bookkit_workspace", { p_days: days }),
+    Promise.resolve()
+      .then(() =>
+        supabase
+          .from("inspiration_items")
+          .select("project_id, file_name, tags, added_at")
+          .order("added_at")
+      )
+      .catch(() => ({ data: null })),
+  ]);
   if (error) throw error;
-  return (data ?? []) as WorkspaceBook[];
+  const books = (data ?? []) as WorkspaceBook[];
+  const inspRows = (inspRes?.data ?? []) as Array<{
+    project_id: string;
+    file_name: string;
+    tags: string[] | null;
+  }>;
+  if (inspRows.length === 0) return books;
+
+  const byProject = new Map<string, Array<{ fileName: string; tags: string[] | null }>>();
+  for (const row of inspRows) {
+    if (!row?.project_id || !row?.file_name) continue;
+    const list = byProject.get(row.project_id) ?? [];
+    list.push({ fileName: row.file_name, tags: row.tags ?? [] });
+    byProject.set(row.project_id, list);
+  }
+
+  return books.map((book) => {
+    const items = byProject.get(book.project_id);
+    if (!items || items.length === 0) return book;
+    const picked = pickBookCoverItem(items);
+    if (!picked) return book;
+    return {
+      ...book,
+      cover_file: picked.item.fileName,
+      cover_tone: picked.tone,
+    };
+  });
 }
 
 

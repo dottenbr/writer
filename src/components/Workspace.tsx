@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { useHomeStore } from "../store/useHomeStore";
-import { createLibrary, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook } from "../lib/supabase-service";
+import { createLibrary, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook } from "../lib/supabase-service";
+import { generateAndCacheCoverThumbnail, inverseTextColorForTone, readCachedCover, type CachedCoverArt } from "../lib/cover-art";
 import { useLibraryStore, canWriteIn } from "../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../lib/library-host";
 import { LibrarySettings } from "./LibrarySettings";
@@ -118,6 +119,65 @@ function Spark({ book }: { book: WorkspaceBook }) {
   );
 }
 
+function BookCover({ book }: { book: WorkspaceBook }) {
+  const initial = book.name.replace(/^(the|a|an)\s+/i, "").slice(0, 1).toUpperCase();
+  const coverFile = book.cover_file ?? null;
+  const [cover, setCover] = useState<CachedCoverArt | null>(() =>
+    coverFile ? readCachedCover(book.project_id, coverFile) : null
+  );
+
+  useEffect(() => {
+    if (!coverFile) {
+      setCover(null);
+      return;
+    }
+    const cached = readCachedCover(book.project_id, coverFile);
+    if (cached) {
+      setCover(cached);
+      return;
+    }
+    let live = true;
+    getInspirationUrl(book.project_id, coverFile)
+      .then((signedUrl) => {
+        if (!live || !signedUrl) return null;
+        return generateAndCacheCoverThumbnail(
+          book.project_id,
+          coverFile,
+          signedUrl,
+          book.cover_tone ?? null
+        );
+      })
+      .then((result) => {
+        if (live && result) setCover(result);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [book.project_id, coverFile, book.cover_tone]);
+
+  const tone = cover?.tone ?? book.cover_tone ?? null;
+  const textColor = cover?.textColor ?? (tone ? inverseTextColorForTone(tone) : undefined);
+
+  return (
+    <div
+      className={`ws-cover ${cover ? "has-art" : ""}`}
+      data-tone={tone ?? undefined}
+      style={
+        cover
+          ? {
+              backgroundImage: `url("${cover.dataUrl}")`,
+              color: textColor,
+            }
+          : undefined
+      }
+      aria-hidden
+    >
+      <span style={textColor ? { color: textColor } : undefined}>{initial}</span>
+    </div>
+  );
+}
+
 function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; onOpen: () => void; featured?: boolean; library?: Library }) {
   const target = book.target_words || 0;
   const pct = target ? Math.min(100, Math.round((book.author_words / target) * 100)) : 0;
@@ -129,7 +189,7 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   return (
     <button className={`ws-book ${featured ? "featured" : ""}`} onClick={onOpen}>
       <div className="ws-book-top">
-        <div className="ws-cover" aria-hidden><span>{book.name.replace(/^(the|a|an)\s+/i, "").slice(0, 1).toUpperCase()}</span></div>
+        <BookCover book={book} />
         <div className="ws-book-head">
           <div className="ws-book-title">{book.name}</div>
           <div className="ws-book-meta">

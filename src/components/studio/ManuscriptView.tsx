@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
+import { useProjectStore } from "../../store/useProjectStore";
 import { useListenStore } from "../../store/useListenStore";
 import { parseScenes } from "../../lib/scene-cards";
-import { discardBookDocument, saveBookDocument } from "../../lib/supabase-service";
+import { discardBookDocument, getInspirationUrl, saveBookDocument } from "../../lib/supabase-service";
+import { dailyInspirationIndex, isImageFile, nextShuffleIndex } from "../../lib/cover-art";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
 import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
 import { ActiveDoc } from "./ActiveDoc";
@@ -15,7 +17,44 @@ function TitlePage() {
   const model = useBookStore(s => s.model)!;
   const files = useBookStore(s => s.files);
   const go = useBookStore(s => s.go);
+  const setView = useBookStore(s => s.setView);
   const wordsToday = useBookStore(s => s.wordsToday);
+  const projectId = useProjectStore(s => s.currentProjectId) ?? "";
+  const inspirationItems = useProjectStore(s => s.inspirationItems);
+  const imageItems = useMemo(
+    () => inspirationItems.filter(i => isImageFile(i.fileName)),
+    [inspirationItems]
+  );
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const dailyIdx = useMemo(
+    () => dailyInspirationIndex(todayIso, projectId, imageItems.length),
+    [todayIso, projectId, imageItems.length]
+  );
+  const [bgIndex, setBgIndex] = useState(dailyIdx);
+  const [bgUrl, setBgUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBgIndex(dailyIdx);
+  }, [dailyIdx]);
+
+  const activeItem = imageItems[bgIndex] ?? imageItems[0] ?? null;
+
+  useEffect(() => {
+    if (!projectId || !activeItem) {
+      setBgUrl(null);
+      return;
+    }
+    let live = true;
+    getInspirationUrl(projectId, activeItem.fileName)
+      .then(url => {
+        if (live && url) setBgUrl(url);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [projectId, activeItem]);
+
   const synopsis = useMemo(() => {
     const doc = files.find(f => f.path === "bible/book-on-one-page.md");
     if (!doc) return "";
@@ -27,23 +66,55 @@ function TitlePage() {
   const authorWords = model.chapters.reduce((n, c) => n + c.authorWords, 0);
   const draftWords = model.chapters.reduce((n, c) => n + c.referenceWords, 0);
   return (
-    <header className="title-page">
-      {model.config?.kind && <div className="title-page-eyebrow">{model.config.kind === "nonfiction" ? "Nonfiction" : model.config.kind === "fiction" || model.config.kind === "novel" ? "A novel" : String(model.config.kind)}</div>}
-      <h1 className="title-page-title">{model.title}</h1>
-      {model.author && <div className="title-page-author">{model.author}</div>}
-      {synopsis && <p className="title-page-synopsis">{synopsis.replace(/[*_]/g, "")}</p>}
-      <div className="title-page-stats">
-        <div><strong>{model.chapters.length}</strong><span>chapters</span></div>
-        <div><strong>{written.length}</strong><span>written by you</span></div>
-        <div><strong>{formatWords(authorWords)}</strong><span>your words</span></div>
-        {model.hasDraft && <div><strong>{formatWords(draftWords)}</strong><span>reference draft</span></div>}
-        {wordsToday > 0 && <div><strong className="today">+{formatWords(wordsToday)}</strong><span>today</span></div>}
-      </div>
-      {next && (
-        <button className="btn btn-primary title-page-cta" onClick={() => go(next.authorPath ?? next.currentPath)}>
-          <Icon name="pen" size={15} /> {next.started ? "Continue" : next.authorPath ? "Open" : "Begin"} chapter {next.number}{next.title ? ` · ${next.title}` : ""}
-        </button>
+    <header className={`title-page ${bgUrl ? "has-bg" : ""}`}>
+      {bgUrl && (
+        <div
+          className="title-page-bg"
+          style={{ backgroundImage: `url("${bgUrl}")` }}
+          aria-hidden
+        />
       )}
+      <div className="title-page-content">
+        {model.config?.kind && <div className="title-page-eyebrow">{model.config.kind === "nonfiction" ? "Nonfiction" : model.config.kind === "fiction" || model.config.kind === "novel" ? "A novel" : String(model.config.kind)}</div>}
+        <h1 className="title-page-title">{model.title}</h1>
+        {model.author && <div className="title-page-author">{model.author}</div>}
+        {synopsis && <p className="title-page-synopsis">{synopsis.replace(/[*_]/g, "")}</p>}
+        <div className="title-page-stats">
+          <div><strong>{model.chapters.length}</strong><span>chapters</span></div>
+          <div><strong>{written.length}</strong><span>written by you</span></div>
+          <div><strong>{formatWords(authorWords)}</strong><span>your words</span></div>
+          {model.hasDraft && <div><strong>{formatWords(draftWords)}</strong><span>reference draft</span></div>}
+          {wordsToday > 0 && <div><strong className="today">+{formatWords(wordsToday)}</strong><span>today</span></div>}
+        </div>
+        {next && (
+          <button className="btn btn-primary title-page-cta" onClick={() => go(next.authorPath ?? next.currentPath)}>
+            <Icon name="pen" size={15} /> {next.started ? "Continue" : next.authorPath ? "Open" : "Begin"} chapter {next.number}{next.title ? ` · ${next.title}` : ""}
+          </button>
+        )}
+        {activeItem && (
+          <div className="title-page-mood">
+            <button
+              type="button"
+              className="link-btn title-page-mood-caption"
+              onClick={() => setView("inspiration")}
+              title="Open the inspiration mood board"
+            >
+              {activeItem.label}
+            </button>
+            {imageItems.length > 1 && (
+              <button
+                type="button"
+                className="btn btn-sm title-page-shuffle"
+                onClick={() => setBgIndex(i => nextShuffleIndex(i, imageItems.length))}
+                title="Shuffle background from the inspiration mood board"
+                aria-label="Shuffle background image"
+              >
+                <Icon name="sparkle" size={13} /> Shuffle
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </header>
   );
 }

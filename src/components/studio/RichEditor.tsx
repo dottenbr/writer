@@ -85,7 +85,11 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
     const path = scenes?.path;
     editor.storage.sceneSlots.config = {
       count: scenes?.count ?? 0,
-      render: path ? (index: number, el: HTMLElement) => { const root = createRoot(el); root.render(<SceneCardInline path={path} index={index} />); return () => setTimeout(() => root.unmount(), 0); } : null,
+      render: path ? (index: number, el: HTMLElement, waiting: boolean) => {
+        const root = createRoot(el);
+        root.render(<SceneCardInline path={path} index={index} waiting={waiting} onBegin={waiting && editor.isEditable ? () => editor.chain().focus("end").setHorizontalRule().run() : undefined} />);
+        return () => setTimeout(() => root.unmount(), 0);
+      } : null,
     };
     editor.view.dispatch(editor.state.tr.setMeta(sceneSlotsKey, true));
   }, [editor, scenes?.path, scenes?.count]);
@@ -159,14 +163,21 @@ export function StaticProse({ body, className, onActivate, matcher, scenesPath }
   };
   if (!scenesPath || !count) return <div className={`doc-prose static ${className ?? ""}`} onMouseUp={activate} dangerouslySetInnerHTML={{ __html: html }} />;
   // Scenes are the stretches between scene breaks; each gets its card on top.
-  const parts = html.split(/(<hr[^>]*>)/);
-  const scenes: string[] = [""];
-  for (const part of parts) { if (/^<hr/.test(part)) scenes.push(part); else scenes[scenes.length - 1] += part; }
+  // Scenes start at "## Scene N" headings in books that title them, otherwise after each scene break.
+  const titled = /<h2[^>]*>\s*Scene\s+\d+/i.test(html);
+  let scenes: string[];
+  if (titled) {
+    const parts = html.split(/(?=<h2[^>]*>\s*Scene\s+\d+)/i);
+    scenes = /<h2[^>]*>\s*Scene/i.test(parts[0]) ? parts : [parts[0] + (parts[1] ?? ""), ...parts.slice(2)];
+  } else {
+    scenes = [""];
+    for (const part of html.split(/(<hr[^>]*>)/)) { if (/^<hr/.test(part)) scenes.push(part); else scenes[scenes.length - 1] += part; }
+  }
   return (
     <div className={`doc-prose static ${className ?? ""}`} onMouseUp={activate}>
       {scenes.map((chunk, i) => (
         <div key={i} className="static-scene">
-          {i > 0 && <hr />}
+          {i > 0 && !titled && <hr />}
           {i < count && <SceneCardInline path={scenesPath} index={i} />}
           <div dangerouslySetInnerHTML={{ __html: i > 0 ? chunk.replace(/^<hr[^>]*>/, "") : chunk }} />
         </div>

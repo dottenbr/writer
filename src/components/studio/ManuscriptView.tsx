@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
 import { useListenStore } from "../../store/useListenStore";
+import { parseScenes } from "../../lib/scene-cards";
 import { discardBookDocument, saveBookDocument } from "../../lib/supabase-service";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
 import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
@@ -110,7 +111,7 @@ function StartedNotice({ chapter, session }: { chapter: ChapterInfo; session: Do
   const [error, setError] = useState("");
   if (!isOwner || !projectId || !chapter.authorPath || !chapter.referencePath || !file?.loaded || threads) return null;
   const text = session?.text ?? file.content;
-  if (countWords(markdownToPlain(splitDocument(text).body)) > 0) return null;
+  if (countWords(markdownToPlain(splitDocument(text).body.replace(/^#{1,6}\s.*$/gm, ""))) > 0) return null;
   if (session && (!["idle", "saved"].includes(session.state) || session.text !== file.content)) return null;
   async function discard() {
     setBusy(true); setError("");
@@ -144,7 +145,9 @@ function ReferenceNotice({ chapter }: { chapter: ChapterInfo }) {
     try {
       const reference = files.find(f => f.path === chapter.referencePath)!;
       const target = model.manuscriptDir + "/" + chapter.referencePath.slice(model.draftDir!.length + 1);
-      const row = await saveBookDocument(projectId, target, startChapterContent(reference.content, model.config), null);
+      const scenesFile = chapter.scenesPath ? files.find(f => f.path === chapter.scenesPath)?.content : undefined;
+      const headings = scenesFile ? parseScenes(scenesFile).map(c => c.heading) : [];
+      const row = await saveBookDocument(projectId, target, startChapterContent(reference.content, model.config, headings), null);
       upsert({ ...row, loaded: true });
       go(target);
       setPanel("draft");

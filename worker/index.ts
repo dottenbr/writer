@@ -322,7 +322,10 @@ async function speak(request:Request,env:Env,url:URL,ctx?:{waitUntil:(p:Promise<
 }
 
 export default {async fetch(request:Request,env:Env,ctx?:{waitUntil:(p:Promise<unknown>)=>void}):Promise<Response>{
- const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
+ const url=new URL(request.url);
+ // www.bookkit.net is the same site: send it to bookkit.net, keeping the path.
+ if(url.hostname==='www.bookkit.net'){url.hostname='bookkit.net';return Response.redirect(url.toString(),301);}
+ if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(url.pathname==='/api/sign-in-code'||url.pathname==='/api/sign-in-link')return signInCode(request,env,url).catch(()=>json({ok:true}));
  if(url.pathname==='/api/voice/transcribe')return transcribe(request,env,url).catch(()=>json({error:'Transcription failed. Try again.'},502));
  if(url.pathname==='/api/voice/speak')return speak(request,env,url,ctx).catch(()=>json({error:'Reading aloud failed. Try again.'},502));

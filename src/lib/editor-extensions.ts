@@ -171,13 +171,20 @@ export function bookExtensions(placeholder: string) {
 export interface SceneSlotConfig {
   /** How many cards there are; slot i sits at the start of scene i. */
   count: number;
-  /** Mount a card into a slot; returns how to unmount it. */
-  render: ((index: number, el: HTMLElement) => () => void) | null;
+  /** Mount a card into a slot; returns how to unmount it. `waiting` cards have no scene in the text yet. */
+  render: ((index: number, el: HTMLElement, waiting: boolean) => () => void) | null;
 }
 export const sceneSlotsKey = new PluginKey<DecorationSet>("sceneSlots");
 
-/** Where each scene starts: the top of the text, and just after every scene break. */
+/**
+ * Where each scene starts. Books that title scenes ("## Scene 2 – The offering",
+ * bookkit's `scenes: true`) start a scene at each such heading; the rest start
+ * at the top of the text and just after every scene break.
+ */
 export function sceneStarts(doc: PMNode): number[] {
+  const headings: number[] = [];
+  doc.forEach((node, offset) => { if (node.type.name === "heading" && node.attrs.level === 2 && /^Scene\s+\d+/i.test(node.textContent)) headings.push(offset); });
+  if (headings.length) return headings;
   const starts = [0];
   doc.forEach((node, offset) => { if (node.type.name === "horizontalRule") starts.push(offset + node.nodeSize); });
   return starts;
@@ -189,16 +196,17 @@ function buildSlots(doc: PMNode, config: SceneSlotConfig): DecorationSet {
   const decorations: Decoration[] = [];
   for (let i = 0; i < config.count; i++) {
     // more cards than scenes: the rest wait at the end of the chapter
-    const pos = i < starts.length ? starts[i] : doc.content.size;
+    const waiting = i >= starts.length;
+    const pos = waiting ? doc.content.size : starts[i];
     const render = config.render;
     decorations.push(Decoration.widget(pos, () => {
       const el = document.createElement("div");
       el.className = "scene-slot";
       el.contentEditable = "false";
-      (el as HTMLElement & { _unmount?: () => void })._unmount = render(i, el);
+      (el as HTMLElement & { _unmount?: () => void })._unmount = render(i, el, waiting);
       return el;
     }, {
-      key: `scene-slot-${i}`,
+      key: `scene-slot-${i}-${waiting ? "w" : "s"}`,
       side: -1,
       ignoreSelection: true,
       stopEvent: () => true,

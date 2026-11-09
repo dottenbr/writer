@@ -226,3 +226,11 @@ describe("voice", () => {
     expect(run.mock.calls[0][1]).toMatchObject({ text: "Nora counted the goats.", speaker: "thalia", encoding: "mp3" });
   });
 });
+
+describe("www", () => {
+  it("sends www.bookkit.net to bookkit.net, keeping the path", async () => {
+    const res = await worker.fetch(new Request("https://www.bookkit.net/the-owl/chapter/2?x=1"), baseEnv as any);
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://bookkit.net/the-owl/chapter/2?x=1");
+  });
+});

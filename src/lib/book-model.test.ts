@@ -47,6 +47,14 @@ describe("book model", () => {
     expect(content).not.toContain("Jim opened");
   });
 
+  it("lays out a new chapter in its scenes, without words", () => {
+    const flat = startChapterContent(BOOK["draft/01-solder-paste.md"], model.config, ["Scene 1 – A", "Scene 2 – B", "Scene 3 – C"]);
+    expect(flat.endsWith("# Chapter 1\n\n***\n\n***\n\n")).toBe(true);
+    const titled = startChapterContent(BOOK["draft/01-solder-paste.md"], { ...model.config, manuscript: { ...model.config.manuscript, scenes: true } }, ["Scene 1 – A", "Scene 2 – B"]);
+    expect(titled.endsWith("# Chapter 1\n\n## Scene 1 – A\n\n## Scene 2 – B\n\n")).toBe(true);
+    expect(startChapterContent(BOOK["draft/01-solder-paste.md"], model.config, ["Scene 1 – A"]).endsWith("# Chapter 1\n\n")).toBe(true);
+  });
+
   it("creates new books that pass Bookkit validation", () => {
     const book = parseBookkit(newBookFiles("The Long Way", "A. Writer", "2026-11-08"));
     expect(book.config.title).toBe("The Long Way");

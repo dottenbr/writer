@@ -4,6 +4,11 @@ import App from "./App";
 import "./index.css";
 import "./styles/studio.css";
 
+// www.bookkit.net is the same site; use one address so sign-in and links are consistent.
+if (window.location.hostname === "www.bookkit.net") {
+  window.location.replace("https://bookkit.net" + window.location.pathname + window.location.search + window.location.hash);
+}
+
 try {
   const saved = JSON.parse(localStorage.getItem("bookkit-ui") ?? "{}").theme;
   document.documentElement.dataset.theme = saved ?? (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");

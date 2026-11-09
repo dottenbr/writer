@@ -46,7 +46,7 @@ function Field({ value, label, editable, placeholder, onCommit, onEnter, autoFoc
  * One scene card at the top of its scene in the chapter. Collapsed it shows the
  * scene's number, title and purpose; expanded, every field, editable in place.
  */
-export function SceneCardInline({ path, index }: { path: string; index: number }) {
+export function SceneCardInline({ path, index, waiting, onBegin }: { path: string; index: number; waiting?: boolean; onBegin?: () => void }) {
   const file = useBookStore(s => s.files.find(f => f.path === path));
   const upsert = useBookStore(s => s.upsert);
   const go = useBookStore(s => s.go);
@@ -76,11 +76,12 @@ export function SceneCardInline({ path, index }: { path: string; index: number }
   const missing = SCENE_FIELDS.filter(l => !card.fields.some(f => f.label.toLowerCase() === l.toLowerCase()));
 
   return (
-    <div className={`scene-inline ${open ? "open" : ""}`}>
+    <div className={`scene-inline ${open ? "open" : ""} ${waiting ? "waiting" : ""}`}>
       <button className="scene-inline-head" onClick={toggle} aria-expanded={open}>
         <span className="scene-num">{card.number ?? index + 1}</span>
         <span className="scene-inline-title">{card.title}</span>
         {!open && purpose && <span className="scene-inline-purpose">{purpose}</span>}
+        {waiting && <span className="scene-inline-waiting">not started</span>}
         <span className="scene-inline-chevron"><Icon name={open ? "down" : "chevron"} size={14} /></span>
       </button>
       {open && (
@@ -118,6 +119,7 @@ export function SceneCardInline({ path, index }: { path: string; index: number }
               </select>
             )}
             <span className="muted">{state === "saving" ? "Saving…" : state === "error" ? "Not saved. Reload and try again." : ""}</span>
+            {onBegin && <button className="btn btn-sm" onClick={onBegin}>Begin this scene</button>}
             <button className="link-btn" onClick={() => go(path, { view: "plan", anchor: card.slug })}>All scene cards</button>
           </div>
         </div>

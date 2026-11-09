@@ -314,7 +314,8 @@ export function buildBookModel(files: SourceFile[]): BookModel {
     const outline = outlineFor(n);
     const partKey = meta.part != null ? String(meta.part) : (config?.manuscript?.layout === "parts" ? (a ?? r)!.file.path.split("/").slice(-2, -1)[0] : undefined);
     const partTitle = meta.part_title ? String(meta.part_title) : partKey ? pretty(partKey) : "";
-    const words = (f?: SourceFile) => (f ? countWords(markdownToPlain(splitDocument(f.content).body)) : 0);
+    // headings ("## Scene 2 – The offering") aren't words written
+    const words = (f?: SourceFile) => (f ? countWords(markdownToPlain(splitDocument(f.content).body.replace(/^#{1,6}\s.*$/gm, ""))) : 0);
     return {
       number: n,
       title,
@@ -371,8 +372,14 @@ export function buildBookModel(files: SourceFile[]): BookModel {
   };
 }
 
-/** Front matter for a new author chapter beside a reference draft (bookkit `start`). */
-export function startChapterContent(referenceRaw: string, config: Record<string, any>): string {
+/**
+ * Front matter for a new author chapter beside a reference draft (bookkit
+ * `start`). With the chapter's scene cards, the empty chapter is laid out in
+ * scenes to match: a "## Scene N – Title" heading each in books that title
+ * scenes (`manuscript.scenes: true`), otherwise a scene break between scenes.
+ * Structure only; no words.
+ */
+export function startChapterContent(referenceRaw: string, config: Record<string, any>, sceneHeadings: string[] = []): string {
   const match = referenceRaw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   const required: string[] = config?.manuscript?.front_matter?.required ?? ["chapter", "title", "status"];
   const optional: string[] = config?.manuscript?.front_matter?.optional ?? [];
@@ -394,7 +401,10 @@ export function startChapterContent(referenceRaw: string, config: Record<string,
   if (!hasStatus) lines.push("status: drafting");
   const body = referenceRaw.slice(match ? match[0].length : 0);
   const h1 = body.split("\n").find(l => l.startsWith("# ")) ?? "";
-  return `---\n${lines.join("\n").replace(/\n+$/, "")}\n---\n\n${h1 ? h1 + "\n\n" : ""}`;
+  const scaffold = sceneHeadings.length < 2 ? "" : config?.manuscript?.scenes
+    ? sceneHeadings.map(h => `## ${h}\n\n`).join("")
+    : Array(sceneHeadings.length - 1).fill("***\n\n").join("");
+  return `---\n${lines.join("\n").replace(/\n+$/, "")}\n---\n\n${h1 ? h1 + "\n\n" : ""}${scaffold}`;
 }
 
 export function nextChapterPath(model: BookModel, title: string): { path: string; number: number } {

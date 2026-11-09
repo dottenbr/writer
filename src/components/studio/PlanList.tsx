@@ -20,7 +20,7 @@ function Row({ id, c, canDrag, onOpen }: { id: number; c: ChapterInfo; canDrag: 
         {c.purpose && <span className="plan-row-purpose">{c.purpose.replace(/[*_]/g, "")}</span>}
       </button>
       <span className={`chapter-state ${st.key}`}>{st.label}</span>
-      <span className="plan-row-meta">{c.sceneTitles.length ? `${c.sceneTitles.length} scene${c.sceneTitles.length === 1 ? "" : "s"} · ` : ""}{formatWords(c.authorPath ? c.authorWords : c.referenceWords)} w</span>
+      <span className="plan-row-meta">{c.sceneTitles.length ? `${c.sceneTitles.length} scene${c.sceneTitles.length === 1 ? "" : "s"} · ` : ""}{c.authorPath ? `${formatWords(c.authorWords)} / ${formatWords(c.targetWords)} w` : `${formatWords(c.referenceWords)} w${c.budgetWords ? ` / ${formatWords(c.budgetWords)}` : ""}`}</span>
     </div>
   );
 }
@@ -82,10 +82,11 @@ export function PlanList() {
   }
 
   const written = model.chapters.filter(c => c.authorPath && !c.started).length;
+  const authorTotal = model.chapters.reduce((n, c) => n + c.authorWords, 0);
   const total = model.chapters.reduce((n, c) => n + (c.authorPath ? c.authorWords : c.referenceWords), 0);
   return (
     <div className="plan-list">
-      <div className="plan-list-summary">{model.chapters.length} chapters · {written} written · {formatWords(total)} words{isOwner ? <span className="muted"> · drag ⠿ to reorder</span> : null}</div>
+      <div className="plan-list-summary">{model.chapters.length} chapters · {written} written · {formatWords(authorTotal > 0 ? authorTotal : total)} of {formatWords(model.targetWords)} words{isOwner ? <span className="muted"> · drag ⠿ to reorder</span> : null}</div>
       {error && <div className="inline-error" role="alert">{error}</div>}
       {pending && (
         <div className="reorder-confirm" role="alertdialog">

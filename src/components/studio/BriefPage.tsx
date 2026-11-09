@@ -3,6 +3,8 @@ import { useProjectStore } from "../../store/useProjectStore";
 import { useBookStore } from "../../store/useBookStore";
 import { formatWords, Icon, useAccess } from "./common";
 import { splitDocument } from "../../lib/markdown-doc";
+import { BOOK_FORMS, formMeta, updateConfig, type BookForm, type ConfigPatch } from "../../lib/book-config";
+import { saveBookDocument } from "../../lib/supabase-service";
 
 /** A text field that saves when you leave it, not on every keystroke. */
 function Field({ label, value, onSave, multiline, placeholder, disabled }: { label: string; value: string; onSave: (v: string) => void; multiline?: boolean; placeholder?: string; disabled?: boolean }) {
@@ -24,15 +26,26 @@ export function BriefPage() {
   const updateBrief = useProjectStore(s => s.updateBrief);
   const model = useBookStore(s => s.model)!;
   const files = useBookStore(s => s.files);
+  const upsert = useBookStore(s => s.upsert);
   const go = useBookStore(s => s.go);
-  const { canEdit } = useAccess();
+  const { canEdit, isOwner, projectId } = useAccess();
   const [theme, setTheme] = useState("");
   const brief = project?.brief;
   if (!brief) return <div className="page doc-page"><div className="doc-loading"><span className="spinner" /> Opening…</div></div>;
 
+  const yamlFile = files.find(f => f.path === "book.yaml");
+  const patchBookYaml = async (patch: ConfigPatch) => {
+    if (!projectId || !yamlFile || !isOwner) return;
+    const nextText = updateConfig(yamlFile.content, patch);
+    if (nextText === yamlFile.content) return;
+    const saved = await saveBookDocument(projectId, "book.yaml", nextText, yamlFile.version);
+    upsert({ ...saved, loaded: true });
+  };
+
   const words = model.chapters.reduce((n, c) => n + c.authorWords, 0);
   const draftWords = model.chapters.reduce((n, c) => n + c.referenceWords, 0);
-  const target = brief.targetWordCount || 0;
+  const target = model.targetWords || brief.targetWordCount || 0;
+  const chapterTarget = model.chapterTargetWords || 0;
   const pct = target ? Math.min(100, Math.round((words / target) * 100)) : 0;
   const onePage = files.find(f => f.path === "bible/book-on-one-page.md");
   const synopsis = onePage ? splitDocument(onePage.content).body.split(/\n\s*\n/).map(p => p.trim()).find(p => p && !p.startsWith("#")) ?? "" : "";
@@ -73,15 +86,77 @@ export function BriefPage() {
       <section className="brief-length">
         <div className="brief-length-head">
           <div>
-            <div className="panel-label">Length</div>
-            <div className="brief-length-numbers"><strong>{formatWords(words)}</strong> of your words{target ? <> · target <strong>{formatWords(target)}</strong></> : null}{model.hasDraft ? <span className="muted"> · draft {formatWords(draftWords)}</span> : null}</div>
+            <div className="panel-label">Form & length</div>
+            <div className="brief-length-numbers">
+              <strong>{model.formLabel}</strong> · <strong>{formatWords(words)}</strong> of your words
+              {target ? <> · book goal <strong>{formatWords(target)}</strong></> : null}
+              {chapterTarget ? <span className="muted"> · ~{formatWords(chapterTarget)} / chapter</span> : null}
+              {model.hasDraft ? <span className="muted"> · draft {formatWords(draftWords)}</span> : null}
+            </div>
           </div>
-          <label className="brief-target">Target words
-            <input type="number" min={0} step={1000} disabled={!canEdit} defaultValue={target || ""} key={target} placeholder="80000" onBlur={e => { const n = Math.max(0, Math.round(Number(e.target.value) || 0)); if (n !== target) updateBrief("targetWordCount", n); }} />
-          </label>
+          <div className="brief-targets">
+            <label className="brief-target">Form
+              <select
+                value={model.form}
+                disabled={!canEdit}
+                onChange={e => {
+                  const nextForm = e.target.value as BookForm;
+                  const fm = formMeta(nextForm);
+                  const hasCustomTarget = Number(model.config?.manuscript?.target_words) > 0;
+                  if (!hasCustomTarget) updateBrief("targetWordCount", fm.defaultTargetWords);
+                  void patchBookYaml({ form: nextForm, kind: fm.kind });
+                }}
+              >
+                <optgroup label="Fiction">
+                  {BOOK_FORMS.filter(f => f.kind === "fiction").map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Nonfiction">
+                  {BOOK_FORMS.filter(f => f.kind === "nonfiction").map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </label>
+            <label className="brief-target">Book goal
+              <input
+                type="number"
+                min={500}
+                step={500}
+                disabled={!canEdit}
+                defaultValue={target || ""}
+                key={`book-${target}`}
+                placeholder={String(formMeta(model.form, model.kind).defaultTargetWords)}
+                onBlur={e => {
+                  const raw = e.target.value.trim();
+                  const n = raw === "" ? null : Math.max(500, Math.round(Number(raw) || 0));
+                  const resolved = n ?? formMeta(model.form, model.kind).defaultTargetWords;
+                  if (resolved !== brief.targetWordCount) updateBrief("targetWordCount", resolved);
+                  void patchBookYaml({ targetWords: n });
+                }}
+              />
+            </label>
+            <label className="brief-target">Chapter goal
+              <input
+                type="number"
+                min={100}
+                step={100}
+                disabled={!canEdit}
+                defaultValue={model.config?.manuscript?.chapter_words ?? chapterTarget ?? ""}
+                key={`chap-${model.config?.manuscript?.chapter_words ?? chapterTarget}`}
+                placeholder={String(formMeta(model.form, model.kind).defaultChapterWords)}
+                onBlur={e => {
+                  const raw = e.target.value.trim();
+                  const n = raw === "" ? null : Math.max(100, Math.round(Number(raw) || 0));
+                  void patchBookYaml({ chapterWords: n });
+                }}
+              />
+            </label>
+          </div>
         </div>
         {target > 0 && <div className="brief-bar"><span style={{ width: `${pct}%` }} /></div>}
-        {target > 0 && <div className="muted">{pct}% written · about {Math.round(words / 300)} of {Math.round(target / 300)} pages</div>}
+        {target > 0 && <div className="muted">{pct}% written · about {Math.round(words / 275)} of {Math.round(target / 275)} pages</div>}
       </section>
 
       {synopsis && (

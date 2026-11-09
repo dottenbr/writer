@@ -57,6 +57,17 @@ describe("book.yaml configuration", () => {
     expect(keys(tidy)).toEqual(["slug", "title", "ai_policy", "manuscript"]);
     expect(parse(tidy)).toEqual(parse(messy));
   });
+
+  it("writes literary form, book word-count goal, and chapter word-count goal cleanly", () => {
+    const next = updateConfig(owl, { form: "novella", targetWords: 28000, chapterWords: 2000, allowChapterBudget: true });
+    const c = readConfig(next);
+    expect(c).toMatchObject({ kind: "fiction", form: "novella", targetWords: 28000, chapterWords: 2000 });
+    expect(parse(next).manuscript).toMatchObject({ target_words: 28000, chapter_words: 2000 });
+    expect(parse(next).manuscript.front_matter.optional).toContain("draft_budget_words");
+    const cleared = updateConfig(next, { targetWords: null, chapterWords: null });
+    expect(readConfig(cleared).targetWords).toBeNull();
+    expect(readConfig(cleared).chapterWords).toBeNull();
+  });
 });
 
 import { newBookFiles } from "./supabase-service";
@@ -65,9 +76,11 @@ describe("new books", () => {
   it("start with a clean book.yaml, their shelf's style and current policy copies", () => {
     const files = newBookFiles("The Long Way", "A. Writer", "2026-11-09", { spelling: "oxford", serial_comma: false });
     const c = readConfig(files["book.yaml"]);
-    expect(c).toMatchObject({ kind: "fiction", byline: "own-name", aiPolicy: "human-authored", styleInherit: "shelf", style: { spelling: "oxford", serial_comma: false } });
+    expect(c).toMatchObject({ kind: "fiction", form: "novel", byline: "own-name", aiPolicy: "human-authored", styleInherit: "shelf", style: { spelling: "oxford", serial_comma: false } });
     expect(keys(files["book.yaml"])).toEqual(KEY_ORDER.filter(k => keys(files["book.yaml"]).includes(k)));
     expect(verifyPolicy(files, policy("human-authored")!)).toEqual([]);
     expect(readConfig(newBookFiles("X", "Y")["book.yaml"]).styleInherit).toBe("own");
+    const novella = readConfig(newBookFiles("Short Work", "A. Writer", "2026-11-09", undefined, { form: "novella", targetWords: 24000, chapterWords: 2000 })["book.yaml"]);
+    expect(novella).toMatchObject({ kind: "fiction", form: "novella", targetWords: 24000, chapterWords: 2000 });
   });
 });

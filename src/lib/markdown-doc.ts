@@ -61,9 +61,21 @@ export function joinDocument(doc: SplitDocument, body: string): string {
   return doc.frontMatter + doc.lead + doc.titleBlock + body;
 }
 
-/** Replace (or add) one top-level key in the front matter, keeping every other line as written. */
-export function setFrontMatterField(raw: string, key: string, value: string | number): string {
+/** Replace, add, or remove (when value is null/undefined) one top-level key in the front matter, keeping every other line as written. */
+export function setFrontMatterField(raw: string, key: string, value: string | number | null | undefined): string {
   const match = raw.match(FRONT);
+  if (value === null || value === undefined || value === "") {
+    if (!match) return raw;
+    const lines = match[1].split(/\r?\n/);
+    const index = lines.findIndex(l => new RegExp(`^${key}\\s*:`).test(l));
+    if (index < 0) return raw;
+    let end = index + 1;
+    while (end < lines.length && /^\s+\S/.test(lines[end])) end++;
+    lines.splice(index, end - index);
+    const nl = match[0].includes("\r\n") ? "\r\n" : "\n";
+    const fence = match[0].endsWith("\n") ? nl : "";
+    return `---${nl}${lines.join(nl)}${nl}---${fence}` + raw.slice(match[0].length);
+  }
   const line = stringifyYaml({ [key]: value }).trimEnd();
   if (!match) return `---\n${line}\n---\n\n${raw}`;
   const lines = match[1].split(/\r?\n/);

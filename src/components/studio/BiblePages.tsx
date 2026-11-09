@@ -109,7 +109,7 @@ export function EntityIndex({ path }: { path: string }) {
         <div className="board-actions">
           {entities.length > 6 && <div className="board-search"><Icon name="search" size={14} /><input value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${(doc?.title ?? "").toLowerCase()}`} aria-label="Search" /></div>}
           <button className="btn btn-sm" onClick={() => go(path, { anchor: FULL_PAGE, view: "bible" })}><Icon name="file" size={14} /> Whole page</button>
-          {isOwner && <button className="btn btn-sm btn-primary" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> {KIND_NEW[kind]}</button>}
+          {isOwner && <button data-no-tab className="btn btn-sm btn-primary" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> {KIND_NEW[kind]}</button>}
         </div>
       </header>
       {adding && (

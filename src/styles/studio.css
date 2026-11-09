@@ -243,9 +243,10 @@ kbd { font-family: var(--ui); font-size: 11px; color: var(--ink-3); border: 1px 
 .chapter-title-input { width: 100%; border: 0; background: transparent; outline: 0; padding: 0; border-bottom: 1px dashed transparent; }
 .chapter-title-input:hover { border-bottom-color: var(--line-2); }
 .chapter-title-input:focus { border-bottom-color: var(--accent); }
-.chapter-status-row { margin-top: 12px; display: flex; justify-content: center; }
+.chapter-status-row { margin-top: 12px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; }
 .chapter-status-row label { display: flex; align-items: center; gap: 8px; font: 12.5px var(--ui); color: var(--ink-3); }
-.chapter-status-row select { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; font: 12.5px var(--ui); padding: 3px 6px; }
+.chapter-status-row select, .chapter-status-row .chapter-goal-input { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; font: 12.5px var(--ui); padding: 3px 6px; font-variant-numeric: tabular-nums; }
+.chapter-status-row .chapter-goal-input { width: 92px; }
 .reference-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: -12px 0 32px; padding: 12px 14px; background: var(--surface-3); border-radius: 8px; font: 13.5px/1.45 var(--ui); color: var(--ink-2); }
 .empty-chapter { display: block; width: 100%; border: 1px dashed var(--line-2); background: transparent; color: var(--ink-3); border-radius: 8px; padding: 24px; font: 14px var(--ui); cursor: text; }
 .doc-loading { color: var(--ink-3); font: 14px var(--ui); display: flex; align-items: center; gap: 10px; padding: 24px 0; }
@@ -643,8 +644,10 @@ kbd { font-family: var(--ui); font-size: 11px; color: var(--ink-3); border: 1px 
 .brief-length-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
 .brief-length-numbers { font-size: 15px; color: var(--ink-2); margin-top: 4px; }
 .brief-length-numbers strong { color: var(--ink); }
+.brief-targets { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
 .brief-target { display: flex; flex-direction: column; gap: 4px; font: 12px var(--ui); color: var(--ink-3); }
-.brief-target input { width: 130px; height: 34px; border: 1px solid var(--line-2); border-radius: 8px; padding: 0 10px; font: 14px var(--ui); color: var(--ink); background: var(--surface); }
+.brief-target input, .brief-target select { width: 130px; height: 34px; border: 1px solid var(--line-2); border-radius: 8px; padding: 0 10px; font: 14px var(--ui); color: var(--ink); background: var(--surface); font-variant-numeric: tabular-nums; }
+.brief-target select { width: auto; min-width: 150px; }
 .brief-bar { height: 8px; border-radius: 6px; background: var(--surface-3); overflow: hidden; }
 .brief-bar span { display: block; height: 100%; background: var(--written); border-radius: 6px; }
 .brief-synopsis { margin-bottom: 28px; }

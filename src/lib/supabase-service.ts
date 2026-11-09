@@ -8,7 +8,7 @@
 import { AUTH_STORAGE_KEY, supabase } from "./supabase-client";
 import { cookieStorage } from "./cookie-storage";
 import { policy as policyDefinition, syncPolicy } from "./policy-blocks";
-import { STYLE_KEYS } from "./book-config";
+import { formMeta, STYLE_KEYS, type BookForm } from "./book-config";
 import { pickBookCoverItem, type CoverTone } from "./cover-art";
 import type {
   Project,
@@ -1968,16 +1968,26 @@ export async function downloadBookAsset(projectId:string,doc:BookDocumentRow):Pr
 // New books start as a clean Bookkit structure
 // ────────────────────────────────────────────────────────────
 
-export function newBookFiles(title: string, author: string, today = new Date().toISOString().slice(0, 10), shelfStyle?: Record<string, unknown> | null): Record<string, string> {
+export function newBookFiles(
+  title: string,
+  author: string,
+  today = new Date().toISOString().slice(0, 10),
+  shelfStyle?: Record<string, unknown> | null,
+  options?: { form?: BookForm; targetWords?: number | null; chapterWords?: number | null }
+): Record<string, string> {
   const slug = title.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
   const q = (s: string) => JSON.stringify(s);
   const checked = `---\nchecked: ${today}\n---\n\n`;
   const style = shelfStyle && Object.keys(shelfStyle).length ? shelfStyle : null;
   const ordered = style ? STYLE_KEYS.filter(k => style[k] != null).map(k => [k, style[k]] as const) : [];
   const styleBlock = ordered.length ? `style:\n  inherit: shelf\n${ordered.map(([k, v]) => `  ${k}: ${v}`).join('\n')}\n\n` : '';
+  const fm = formMeta(options?.form ?? 'novel');
+  const formLine = options?.form ? `form: ${fm.value}\n` : '';
+  const targetLine = options?.targetWords && options.targetWords > 0 ? `  target_words: ${Math.round(options.targetWords)}\n` : '';
+  const chapterLine = options?.chapterWords && options.chapterWords > 0 ? `  chapter_words: ${Math.round(options.chapterWords)}\n` : '';
   const policyDocs = syncPolicy({ 'README.md': `# ${title}\n\nA book by ${author || 'the author'}, written in Bookkit.\n`, 'CLAUDE.md': `# CLAUDE.md\n\nGuidance for anyone, person or model, working on this book.\n` }, policyDefinition('human-authored')!, title);
   return {
-    'book.yaml': `slug: ${slug}\ntitle: ${q(title)}\nauthor: ${q(author)}\nbyline: own-name\nlanguage: en-US\nkind: fiction\n\nai_policy: human-authored\n\n${styleBlock}manuscript:\n  dir: manuscript\n  layout: flat\n  scenes: false\n  front_matter:\n    required: [chapter, title, status]\n\npublication:\n  formats: [docx, epub, pdf]\n  title_page: true\n\ncompanion:\n  standard: 1\n`,
+    'book.yaml': `slug: ${slug}\ntitle: ${q(title)}\nauthor: ${q(author)}\nbyline: own-name\nlanguage: en-US\nkind: ${fm.kind}\n${formLine}\nai_policy: human-authored\n\n${styleBlock}manuscript:\n  dir: manuscript\n  layout: flat\n${targetLine}${chapterLine}  scenes: false\n  front_matter:\n    required: [chapter, title, status]\n    optional: [anchor, draft_budget_words]\n\npublication:\n  formats: [docx, epub, pdf]\n  title_page: true\n\ncompanion:\n  standard: 1\n`,
     'README.md': policyDocs['README.md'],
     'CLAUDE.md': policyDocs['CLAUDE.md'],
     'manuscript/01-chapter-one.md': `---\nchapter: 1\ntitle: "Chapter One"\nstatus: drafting\n---\n\n# Chapter 1\n\n`,
@@ -1992,11 +2002,17 @@ export function newBookFiles(title: string, author: string, today = new Date().t
   };
 }
 
-export async function createBook(title: string, author: string, place: { libraryId?: string | null; shelfId?: string | null } = {}): Promise<string> {
+export async function createBook(
+  title: string,
+  author: string,
+  place: { libraryId?: string | null; shelfId?: string | null; form?: BookForm; targetWords?: number | null; chapterWords?: number | null } = {}
+): Promise<string> {
   const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
+  const fm = formMeta(place.form ?? 'novel');
+  const targetWordCount = place.targetWords && place.targetWords > 0 ? Math.round(place.targetWords) : fm.defaultTargetWords;
   const { data: project, error } = await supabase.from('projects')
-    .insert({ owner_id: user.id, name: title, brief_title: title, bookkit_slug: 'new/' + crypto.randomUUID(), bookkit_import_complete: true, library_id: place.libraryId ?? null, shelf_id: place.shelfId ?? null })
+    .insert({ owner_id: user.id, name: title, brief_title: title, brief_target_word_count: targetWordCount, bookkit_slug: 'new/' + crypto.randomUUID(), bookkit_import_complete: true, library_id: place.libraryId ?? null, shelf_id: place.shelfId ?? null })
     .select('id').single();
   if (error || !project) throw error ?? new Error('Could not create the book');
   const projectId = project.id as string;
@@ -2008,7 +2024,7 @@ export async function createBook(title: string, author: string, place: { library
     await must(supabase.from('export_configs').insert({ project_id: projectId, author }));
     let shelfStyle: Record<string, unknown> | null = null;
     if (place.shelfId) shelfStyle = ((await supabase.from('shelves').select('style').eq('id', place.shelfId).maybeSingle()).data?.style as Record<string, unknown>) ?? null;
-    const rows = Object.entries(newBookFiles(title, author, undefined, shelfStyle)).map(([path, content]) => ({ project_id: projectId, path, content, source_sha256: 'new-human-document' }));
+    const rows = Object.entries(newBookFiles(title, author, undefined, shelfStyle, { form: place.form ?? 'novel', targetWords: place.targetWords, chapterWords: place.chapterWords })).map(([path, content]) => ({ project_id: projectId, path, content, source_sha256: 'new-human-document' }));
     await must(supabase.from('bookkit_documents').insert(rows));
     return projectId;
   } catch (e) {
@@ -2161,16 +2177,32 @@ export interface Library {
 
 export const LIBRARY_SLUG = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 
+export const RESERVED_LIBRARY_SLUGS = new Set([
+  "www", "api", "app", "mail", "email", "admin", "auth", "login",
+  "static", "assets", "help", "support", "blog", "status", "docs",
+  "dev", "staging", "test", "bookkit", "library", "libraries"
+]);
+
+export function validateLibrarySlug(slug: string): string | null {
+  const clean = slug.trim().toLowerCase();
+  if (!clean) return "Choose an address for your library.";
+  if (!LIBRARY_SLUG.test(clean)) return "Use 1–32 lowercase letters, numbers, and dashes (not starting or ending with a dash).";
+  if (RESERVED_LIBRARY_SLUGS.has(clean)) return `“${clean}” is a reserved Bookkit address. Choose another.`;
+  return null;
+}
+
 export async function loadLibraries(): Promise<Library[]> {
   const { data, error } = await supabase.rpc('bookkit_libraries');
   if (error) throw error;
   return (data ?? []) as Library[];
 }
 
-export async function createLibrary(name: string, slug: string): Promise<string> {
+export async function createLibrary(name: string, slug: string, description = ""): Promise<string> {
   const user = await getCurrentUser();
   if (!user) throw new Error('Not authenticated');
-  const { data, error } = await supabase.from('libraries').insert({ name: name.trim(), slug: slug.trim().toLowerCase(), owner_id: user.id, created_by: user.id }).select('id').single();
+  const row: Record<string, unknown> = { name: name.trim(), slug: slug.trim().toLowerCase(), owner_id: user.id, created_by: user.id };
+  if (description.trim()) row.description = description.trim().slice(0, 500);
+  const { data, error } = await supabase.from('libraries').insert(row).select('id').single();
   if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'That address is taken. Try another.' : /check/i.test(error.message) ? 'Use lowercase letters, numbers and dashes for the address.' : error.message);
   return data.id as string;
 }
@@ -2180,9 +2212,107 @@ export async function updateLibrary(id: string, patch: { name?: string; slug?: s
   if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'That address is taken. Try another.' : /check/i.test(error.message) ? 'Use lowercase letters, numbers and dashes for the address (some names are reserved).' : error.message);
 }
 
-export async function addShelf(libraryId: string, name: string, position: number): Promise<void> {
-  const { error } = await supabase.from('shelves').insert({ library_id: libraryId, name: name.trim(), position });
+export async function addShelf(libraryId: string, name: string, position: number, style?: Record<string, unknown>): Promise<void> {
+  const row: Record<string, unknown> = { library_id: libraryId, name: name.trim(), position };
+  if (style && Object.keys(style).length > 0) row.style = style;
+  const { error } = await supabase.from('shelves').insert(row);
   if (error) throw error;
+}
+
+export interface OnboardingShelfInput {
+  name: string;
+  style?: Record<string, unknown>;
+}
+
+/**
+ * Create a library and its initial shelves (returning the library ID and
+ * created shelf IDs in position order).
+ */
+export async function createLibraryWithShelves(
+  name: string,
+  slug: string,
+  description: string,
+  shelves: OnboardingShelfInput[]
+): Promise<{ libraryId: string; shelfIds: string[] }> {
+  const slugErr = validateLibrarySlug(slug);
+  if (slugErr) throw new Error(slugErr);
+  const libraryId = await createLibrary(name, slug, description);
+  const shelfIds: string[] = [];
+  for (const [position, shelf] of shelves.entries()) {
+    const trimmed = shelf.name.trim();
+    if (!trimmed) continue;
+    const row: Record<string, unknown> = { library_id: libraryId, name: trimmed, position };
+    if (shelf.style && Object.keys(shelf.style).length > 0) row.style = shelf.style;
+    const { data, error } = await supabase.from('shelves').insert(row).select('id').single();
+    if (error) throw error;
+    if (data?.id) shelfIds.push(String(data.id));
+  }
+  return { libraryId, shelfIds };
+}
+
+/**
+ * Register a new Bookkit account under the free early-access subscription and
+ * establish an authenticated session. Uses the Worker's `/api/signup` endpoint
+ * when available so accounts are immediately confirmed, with a fallback to
+ * Supabase's direct client signUp for local development.
+ */
+export async function registerFreeSubscriptionAccount(
+  email: string,
+  password: string,
+  displayName: string
+): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName = displayName.trim() || cleanEmail.split("@")[0];
+  let workerHandled = false;
+  try {
+    const res = await fetch("/api/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: cleanEmail, password, displayName: cleanName }),
+    });
+    if (res.status === 400 || res.status === 409) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? "Could not create your account.");
+    }
+    if (res.ok) {
+      const body = await res.json().catch(() => null);
+      if (body?.access_token && body?.refresh_token) {
+        const { error } = await supabase.auth.setSession({
+          access_token: body.access_token,
+          refresh_token: body.refresh_token,
+        });
+        if (error) throw error;
+        workerHandled = true;
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && !/fetch|network|502|503|JSON/i.test(err.message)) {
+      throw err;
+    }
+  }
+  if (!workerHandled) {
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: {
+          display_name: cleanName,
+          subscription_plan: "free_early_access",
+          subscription_status: "active",
+          subscribed_at: new Date().toISOString(),
+        },
+      },
+    });
+    if (error) {
+      if (/already|registered|exists/i.test(error.message)) {
+        throw new Error("An account with this email already exists. Sign in instead.");
+      }
+      throw error;
+    }
+    if (!data.session) {
+      await signIn(cleanEmail, password);
+    }
+  }
 }
 export async function renameShelf(id: string, name: string): Promise<void> {
   const { error } = await supabase.from('shelves').update({ name: name.trim() }).eq('id', id);

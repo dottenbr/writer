@@ -73,7 +73,13 @@ export function PlanBoard() {
                   </ol>
                 )}
                 <div className="plan-foot">
-                  <span>{c.authorPath ? `${formatWords(c.authorWords)} words` : c.referenceWords ? `${formatWords(c.referenceWords)} draft words` : "Empty"}</span>
+                  <span>
+                    {c.authorPath
+                      ? `${formatWords(c.authorWords)} of ${formatWords(c.targetWords)} words`
+                      : c.referenceWords
+                        ? `${formatWords(c.referenceWords)} draft words${c.budgetWords ? ` · ${formatWords(c.budgetWords)} goal` : ""}`
+                        : `Goal ${formatWords(c.targetWords)} words`}
+                  </span>
                   {comments > 0 && <span className="plan-comments"><Icon name="comment" size={12} /> {comments}</span>}
                 </div>
               </button>

@@ -3,7 +3,7 @@ import { useBookStore } from "../../store/useBookStore";
 import { useProjectStore } from "../../store/useProjectStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { readBookPlacement, saveBookDocument } from "../../lib/supabase-service";
-import { readConfig, sameStyle, updateConfig, type ConfigPatch, type HouseStyle } from "../../lib/book-config";
+import { BOOK_FORMS, formMeta, readConfig, sameStyle, updateConfig, type BookForm, type ConfigPatch, type HouseStyle } from "../../lib/book-config";
 import { BOOKKIT_POLICIES } from "../../lib/bookkit-policies";
 import { policy as findPolicy, syncPolicy, verifyPolicy } from "../../lib/policy-blocks";
 import { StyleFields } from "./StyleFields";
@@ -16,8 +16,10 @@ const FORMATS = ["docx", "epub", "pdf", "markdown"];
 export function BookConfiguration() {
   const files = useBookStore(s => s.files);
   const upsert = useBookStore(s => s.upsert);
+  const model = useBookStore(s => s.model);
   const project = useProjectStore(s => s.currentProject());
   const renameProject = useProjectStore(s => s.renameProject);
+  const updateBrief = useProjectStore(s => s.updateBrief);
   const libraries = useLibraryStore(s => s.libraries) ?? [];
   const { isOwner, projectId } = useAccess();
   const yamlFile = files.find(f => f.path === "book.yaml");
@@ -65,8 +67,13 @@ export function BookConfiguration() {
           upsert({ ...(await saveBookDocument(projectId, path, content, row ? row.version : null)), loaded: true });
         }
       }
-      const title = readConfig(text).title.trim();
+      const updatedCfg = readConfig(text);
+      const title = updatedCfg.title.trim();
       if (project && title && title !== project.name) renameProject(project.id, title);
+      const nextTarget = updatedCfg.targetWords ?? formMeta(updatedCfg.form, updatedCfg.kind).defaultTargetWords;
+      if (project && project.brief.targetWordCount !== nextTarget) {
+        updateBrief("targetWordCount", nextTarget);
+      }
       setPatch({}); setState("saved");
     } catch (e) { setError((e as Error).message); setState(""); }
   }
@@ -92,9 +99,39 @@ export function BookConfiguration() {
             </select>
           </label>
           <label className="field">Kind
-            <select value={view.kind} disabled={!isOwner} onChange={e => change({ kind: e.target.value as ConfigPatch["kind"] })}>
+            <select
+              value={view.kind}
+              disabled={!isOwner}
+              onChange={e => {
+                const nextKind = e.target.value as ConfigPatch["kind"];
+                const nextForm = formMeta(view.form, nextKind).kind === nextKind ? view.form : (nextKind === "nonfiction" ? "nonfiction" : "novel");
+                change({ kind: nextKind, form: nextForm });
+              }}
+            >
               <option value="fiction">Fiction</option>
               <option value="nonfiction">Nonfiction</option>
+            </select>
+          </label>
+          <label className="field">Form / Type
+            <select
+              value={patch.form ?? (saved.form !== "novel" || original.includes("form:") ? view.form : (model?.form ?? view.form))}
+              disabled={!isOwner}
+              onChange={e => {
+                const nextForm = e.target.value as BookForm;
+                const fm = formMeta(nextForm);
+                change({ form: nextForm, kind: fm.kind });
+              }}
+            >
+              <optgroup label="Fiction">
+                {BOOK_FORMS.filter(f => f.kind === "fiction").map(f => (
+                  <option key={f.value} value={f.value}>{f.label} ({f.rangeLabel})</option>
+                ))}
+              </optgroup>
+              <optgroup label="Nonfiction">
+                {BOOK_FORMS.filter(f => f.kind === "nonfiction").map(f => (
+                  <option key={f.value} value={f.value}>{f.label} ({f.rangeLabel})</option>
+                ))}
+              </optgroup>
             </select>
           </label>
           <label className="field">Language
@@ -102,7 +139,45 @@ export function BookConfiguration() {
               {[...LANGUAGES, ...(LANGUAGES.some(([code]) => code === view.language) ? [] : [[view.language, view.language]])].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
             </select>
           </label>
+          <label className="field">Book word-count goal
+            <input
+              type="number"
+              min={500}
+              step={500}
+              disabled={!isOwner}
+              value={view.targetWords ?? ""}
+              placeholder={String(model?.targetWords ?? formMeta(view.form, view.kind).defaultTargetWords)}
+              onChange={e => {
+                const raw = e.target.value.trim();
+                const n = Number(raw);
+                change({ targetWords: raw === "" ? null : Number.isFinite(n) && n > 0 ? Math.round(n) : null });
+              }}
+            />
+          </label>
+          <label className="field">Chapter word-count goal
+            <input
+              type="number"
+              min={100}
+              step={100}
+              disabled={!isOwner}
+              value={view.chapterWords ?? ""}
+              placeholder={String(model?.chapterTargetWords ?? formMeta(view.form, view.kind).defaultChapterWords)}
+              onChange={e => {
+                const raw = e.target.value.trim();
+                const n = Number(raw);
+                change({ chapterWords: raw === "" ? null : Number.isFinite(n) && n > 0 ? Math.round(n) : null });
+              }}
+            />
+          </label>
         </div>
+        <p className="settings-hint">
+          {(() => {
+            const fm = formMeta(patch.form ?? model?.form ?? view.form, view.kind);
+            const effBook = view.targetWords ?? model?.targetWords ?? fm.defaultTargetWords;
+            const effChap = view.chapterWords ?? model?.chapterTargetWords ?? fm.defaultChapterWords;
+            return `${fm.label}: typical range ${fm.rangeLabel}. Current goal: ${effBook.toLocaleString()} words for the book, ~${effChap.toLocaleString()} words per chapter (chapters can also set their own draft_budget_words in front matter).`;
+          })()}
+        </p>
         {view.byline === "pen-name" && <p className="settings-hint">“{view.author || "The author"}” is a pen name: it’s the name on the cover, the title page and the metadata. Nothing bookkit builds prints the person behind it.</p>}
       </div>
 

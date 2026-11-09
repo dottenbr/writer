@@ -62,6 +62,22 @@ describe("book model", () => {
     const m = buildBookModel(files(newBookFiles("The Long Way", "A. Writer")));
     expect(m.companions.map(d => d.title)).toContain("Characters");
   });
+
+  it("computes book and per-chapter word goals from form, manuscript config, and chapter front matter", () => {
+    expect(model.chapters[0].budgetWords).toBe(3000);
+    expect(model.chapters[0].targetWords).toBe(3000);
+    const novellaFiles = files({
+      ...BOOK,
+      "book.yaml": "title: Schabbach\nauthor: P. Dubois\nkind: fiction\nform: novella\nmanuscript:\n  dir: manuscript\n  draft: draft\n  layout: flat\n  target_words: 16500\n  chapter_words: 1375\n  front_matter:\n    required: [chapter, title, status]\n    optional: [anchor, draft_budget_words]\n",
+    });
+    const novella = buildBookModel(novellaFiles);
+    expect(novella.form).toBe("novella");
+    expect(novella.formEyebrow).toBe("A novella");
+    expect(novella.targetWords).toBe(16500);
+    expect(novella.chapterTargetWords).toBe(1375);
+    expect(novella.chapters[0].targetWords).toBe(3000);
+    expect(novella.chapters[1].targetWords).toBe(1375);
+  });
 });
 
 import { manuscriptText } from "./export-book";

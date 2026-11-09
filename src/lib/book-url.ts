@@ -102,7 +102,10 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   }
   const exists = (p: string) => model.companions.some(d => d.path === p) || model.entities.some(e => e.path === p);
   const full = parts.join("/");
-  if (exists(full + ".md")) return { view: viewForPath(full + ".md"), path: full + ".md", anchor };
+  const asMd = full.endsWith(".md") ? full : full + ".md";
+  const chapterByPath = chapterForPath(model.chapters, asMd);
+  if (chapterByPath) return { view: "write", path: chapterByPath.authorPath ?? chapterByPath.currentPath, anchor };
+  if (exists(asMd)) return { view: viewForPath(asMd), path: asMd, anchor };
   // bible/<page>/<entity> or bible/<page>/full-page
   if (head === "bible" && parts.length >= 3) {
     const path = parts.slice(0, -1).join("/") + ".md";
@@ -112,5 +115,69 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   return null;
 }
 
+/** Resolve a relative Markdown href (`../bible/characters.md#nora`, `02-japan.md`, `#part`) against `currentPath`. */
+export function resolveInternalHref(href: string, currentPath: string, model: BookModel): Route | null {
+  const [file, hash] = href.split("#");
+  const base = currentPath.split("/").slice(0, -1);
+  for (const part of file.split("/")) {
+    if (part === "..") base.pop();
+    else if (part && part !== ".") base.push(part);
+  }
+  const resolved = file ? base.join("/") : currentPath;
+  const chapter = chapterForPath(model.chapters, resolved);
+  if (chapter || model.companions.some(d => d.path === resolved)) {
+    return { view: viewForPath(resolved), path: resolved, anchor: hash || undefined };
+  }
+  return null;
+}
+
+/** Format the browser tab title (`document.title`) for the active book and Studio view. */
+export function studioDocumentTitle(
+  bookTitle: string | undefined,
+  model: BookModel | null,
+  view: StudioView,
+  path: string,
+  anchor?: string,
+  visibleChapter?: number
+): string {
+  const title = (model?.title || bookTitle || "").trim();
+  if (!title) return "Bookkit";
+  if (!model) return `${title} · Bookkit`;
+
+  let sub: string | undefined;
+  if (view === "inspiration") {
+    sub = "Inspiration";
+  } else if (view === "settings") {
+    sub = "Settings";
+  } else if (path === "@brief") {
+    sub = "Brief";
+  } else if (view === "plan" && !path) {
+    sub = "Plan";
+  } else if (view === "bible" && !path) {
+    sub = "Story bible";
+  } else if (view === "plan" && path.startsWith("outline/scenes/")) {
+    const num = Number(path.match(/(\d+)[^/]*\.md$/)?.[1]);
+    const ch = model.chapters.find(c => c.scenesPath === path) ?? model.chapters.find(c => c.number === num);
+    sub = ch ? `Ch. ${ch.number} Scenes` : "Scene cards";
+  } else if (view === "bible" && entityKindForPath(path) && anchor && anchor !== FULL_PAGE) {
+    const ent = model.entities.find(e => e.path === path && e.slug === anchor);
+    sub = ent?.name ?? model.companions.find(d => d.path === path)?.title;
+  } else if (view === "write" && (path === "" || chapterForPath(model.chapters, path))) {
+    const ch = path
+      ? ((visibleChapter ? model.chapters.find(c => c.number === visibleChapter) : undefined) ?? chapterForPath(model.chapters, path))
+      : (visibleChapter ? model.chapters.find(c => c.number === visibleChapter) : undefined);
+    if (ch) sub = ch.title ? `Ch. ${ch.number} · ${ch.title}` : `Chapter ${ch.number}`;
+  } else if (path) {
+    sub = model.companions.find(d => d.path === path)?.title;
+  }
+
+  return sub ? `${title} · ${sub} · Bookkit` : `${title} · Bookkit`;
+}
+
+export function openInNewTab(url: string): void {
+  if (!url || typeof window === "undefined") return;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 /** Opening a book from the workspace: go to where you left off, not the title page. */
-export const navFlags = { openLastPlace: false };
+export const navFlags = { openLastPlace: false, openInNewTab: false };

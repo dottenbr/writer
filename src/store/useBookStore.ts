@@ -3,7 +3,8 @@ import { listBookDocuments, readBookDocument, type BookDocumentRow } from "../li
 import { subscribeBookActivity, readBookReview, type Suggestion, type Thread } from "../lib/bookkit-collaboration";
 import { buildBookModel, type BookModel } from "../lib/book-model";
 import { supabase } from "../lib/supabase-client";
-import { viewForPath, type Route, type StudioView } from "../lib/book-url";
+import { bookSlug, navFlags, openInNewTab, routeToUrl, viewForPath, type Route, type StudioView } from "../lib/book-url";
+import { useProjectStore } from "./useProjectStore";
 
 export type View = StudioView;
 
@@ -222,6 +223,15 @@ export const useBookStore = create<BookState>((set, get) => {
 
     go: (path, opts = {}) => {
       const view = opts.view ?? (path ? viewForPath(path) : "write");
+      if (navFlags.openInNewTab) {
+        navFlags.openInNewTab = false;
+        const { projectId, model } = get();
+        const catalog = useProjectStore.getState().projectCatalog;
+        if (projectId && model) {
+          openInNewTab(routeToUrl(bookSlug(catalog, projectId), { view, path, anchor: opts.anchor }, model));
+        }
+        return;
+      }
       if (view === "write") lastWritePath = path;
       set({ location: { path, anchor: opts.anchor, find: opts.find, nonce: ++nonce }, view });
       const { projectId } = get();
@@ -231,7 +241,19 @@ export const useBookStore = create<BookState>((set, get) => {
 
     applyRoute: (route) => get().go(route.path, { view: route.view, anchor: route.anchor }),
 
-    selectEntity: (id) => set(s => ({ selectedEntity: id, panel: id ? "context" : s.panel, panelOpen: id ? true : s.panelOpen })),
+    selectEntity: (id) => {
+      if (id && navFlags.openInNewTab) {
+        navFlags.openInNewTab = false;
+        const { projectId, model } = get();
+        const catalog = useProjectStore.getState().projectCatalog;
+        const entity = model?.entities.find(e => e.id === id);
+        if (projectId && model && entity) {
+          openInNewTab(routeToUrl(bookSlug(catalog, projectId), { view: "bible", path: entity.path, anchor: entity.slug }, model));
+        }
+        return;
+      }
+      set(s => ({ selectedEntity: id, panel: id ? "context" : s.panel, panelOpen: id ? true : s.panelOpen }));
+    },
     setPanel: (panel, open = true) => { set({ panel, panelOpen: open }); writePrefs({ panel, panelOpen: open }); },
     togglePanel: () => { const open = !get().panelOpen; set({ panelOpen: open }); writePrefs({ panelOpen: open }); },
     setFocusMode: (on) => set({ focusMode: on }),

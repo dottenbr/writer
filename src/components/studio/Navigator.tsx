@@ -113,9 +113,9 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
       <div className="nav-book">
         <div className="nav-book-title">{model.title}</div>
         {model.author && <div className="nav-book-author">{model.author}</div>}
-        <div className="nav-progress" title={`${written} of ${model.chapters.length} chapters written by you`}>
+        <div className="nav-progress" title={`${written} of ${model.chapters.length} chapters written by you · ${totalWords.toLocaleString()} of ${model.targetWords.toLocaleString()} words`}>
           <div className="nav-progress-bar"><span style={{ width: `${model.chapters.length ? (written / model.chapters.length) * 100 : 0}%` }} /></div>
-          <div className="nav-progress-label">{written}/{model.chapters.length} chapters written · {formatWords(totalWords)} words{wordsToday > 0 && <span className="nav-today"> · +{wordsToday.toLocaleString()} today</span>}</div>
+          <div className="nav-progress-label">{written}/{model.chapters.length} chapters · {formatWords(totalWords)} of {formatWords(model.targetWords)} words{wordsToday > 0 && <span className="nav-today"> · +{wordsToday.toLocaleString()} today</span>}</div>
         </div>
       </div>
       <div className="nav-search">
@@ -135,11 +135,11 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
             return (
               <div key={c.number}>
                 {partHeader && <div className="nav-part">{partHeader}</div>}
-                <button className={`nav-item nav-chapter ${activeNumber === c.number ? "active" : ""}`} onClick={() => go(c.authorPath ?? c.referencePath ?? c.currentPath)} title={`${c.label}${c.subtitle ? ` · ${c.subtitle}` : ""} · ${st.label}`}>
+                <button className={`nav-item nav-chapter ${activeNumber === c.number ? "active" : ""}`} onClick={() => go(c.authorPath ?? c.referencePath ?? c.currentPath)} title={`${c.label}${c.subtitle ? ` · ${c.subtitle}` : ""} · ${st.label}${c.authorPath ? ` (${c.authorWords.toLocaleString()} of ${c.targetWords.toLocaleString()} words)` : c.targetWords ? ` (goal ${c.targetWords.toLocaleString()} words)` : ""}`}>
                   <span className={`status-dot ${st.key}`} />
                   <span className="nav-num">{c.number}</span>
                   <span className="nav-item-text">{c.title || `Chapter ${c.number}`}</span>
-                  {badge(c.authorPath) ?? badge(c.referencePath) ?? <span className="nav-words">{c.authorPath ? formatWords(c.authorWords) : ""}</span>}
+                  {badge(c.authorPath) ?? badge(c.referencePath) ?? <span className="nav-words">{c.authorPath ? `${formatWords(c.authorWords)}/${formatWords(c.targetWords)}` : ""}</span>}
                 </button>
               </div>
             );

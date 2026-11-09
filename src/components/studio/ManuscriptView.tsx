@@ -5,6 +5,7 @@ import { useListenStore } from "../../store/useListenStore";
 import { parseScenes } from "../../lib/scene-cards";
 import { discardBookDocument, getInspirationUrl, saveBookDocument } from "../../lib/supabase-service";
 import { dailyInspirationIndex, isImageFile, nextShuffleIndex } from "../../lib/cover-art";
+import { updateConfig } from "../../lib/book-config";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
 import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
 import { ActiveDoc } from "./ActiveDoc";
@@ -75,14 +76,14 @@ function TitlePage() {
         />
       )}
       <div className="title-page-content">
-        {model.config?.kind && <div className="title-page-eyebrow">{model.config.kind === "nonfiction" ? "Nonfiction" : model.config.kind === "fiction" || model.config.kind === "novel" ? "A novel" : String(model.config.kind)}</div>}
+        <div className="title-page-eyebrow">{model.formEyebrow}</div>
         <h1 className="title-page-title">{model.title}</h1>
         {model.author && <div className="title-page-author">{model.author}</div>}
         {synopsis && <p className="title-page-synopsis">{synopsis.replace(/[*_]/g, "")}</p>}
         <div className="title-page-stats">
           <div><strong>{model.chapters.length}</strong><span>chapters</span></div>
           <div><strong>{written.length}</strong><span>written by you</span></div>
-          <div><strong>{formatWords(authorWords)}</strong><span>your words</span></div>
+          <div><strong>{formatWords(authorWords)}</strong><span>{model.targetWords ? `of ${formatWords(model.targetWords)} goal` : "your words"}</span></div>
           {model.hasDraft && <div><strong>{formatWords(draftWords)}</strong><span>reference draft</span></div>}
           {wordsToday > 0 && <div><strong className="today">+{formatWords(wordsToday)}</strong><span>today</span></div>}
         </div>
@@ -120,23 +121,51 @@ function TitlePage() {
 }
 
 function ChapterHeader({ chapter, session, active }: { chapter: ChapterInfo; session: DocSession | null; active: boolean }) {
-  const { isOwner, canEdit } = useAccess();
+  const { isOwner, canEdit, projectId } = useAccess();
+  const files = useBookStore(s => s.files);
+  const upsert = useBookStore(s => s.upsert);
   const st = chapterState(chapter);
   const showingAuthor = !!chapter.authorPath;
   const editableMeta = active && showingAuthor && canEdit && session?.row;
   const meta = session && active ? splitDocument(session.text).metadata : null;
   const title = String(meta?.title ?? chapter.title ?? "");
   const status = String(meta?.status ?? chapter.status);
+  const explicitGoal = Number(meta?.draft_budget_words ?? meta?.target_words ?? chapter.budgetWords ?? 0);
+  const currentGoal = Number.isInteger(explicitGoal) && explicitGoal > 0 ? explicitGoal : null;
+  const shownGoal = currentGoal ?? chapter.targetWords;
   const [draftTitle, setDraftTitle] = useState(title);
+  const [draftGoal, setDraftGoal] = useState(currentGoal ? String(currentGoal) : "");
   useEffect(() => setDraftTitle(title), [title]);
+  useEffect(() => setDraftGoal(currentGoal ? String(currentGoal) : ""), [currentGoal, chapter.number]);
+
+  const commitGoal = async (raw: string) => {
+    if (!session) return;
+    const trimmed = raw.trim();
+    const parsed = trimmed === "" ? null : Math.max(50, Math.round(Number(trimmed) || 0));
+    if (parsed === currentGoal) return;
+    session.setText(setFrontMatterField(session.text, "draft_budget_words", parsed));
+    if (parsed != null && projectId) {
+      const yamlFile = files.find(f => f.path === "book.yaml");
+      if (yamlFile) {
+        const nextYaml = updateConfig(yamlFile.content, { allowChapterBudget: true });
+        if (nextYaml !== yamlFile.content) {
+          try {
+            const saved = await saveBookDocument(projectId, "book.yaml", nextYaml, yamlFile.version);
+            upsert({ ...saved, loaded: true });
+          } catch { /* non-fatal */ }
+        }
+      }
+    }
+  };
+
   return (
     <div className="chapter-head">
       <div className="chapter-eyebrow">
         <span>Chapter {chapter.number}</span>
         <span className={`chapter-state ${st.key}`}>{st.label}</span>
-        {showingAuthor && <span className="chapter-words">{formatWords(chapter.authorWords)} words</span>}
+        {showingAuthor && <span className="chapter-words">{formatWords(chapter.authorWords)}{shownGoal > 0 ? ` of ${formatWords(shownGoal)}` : ""} words</span>}
         <button className="chapter-listen" onClick={() => useListenStore.getState().start(chapter.number)} title="Listen to this chapter"><Icon name="headphones" size={13} /> Listen</button>
-        {!showingAuthor && chapter.referenceWords > 0 && <span className="chapter-words">{formatWords(chapter.referenceWords)} words in draft</span>}
+        {!showingAuthor && chapter.referenceWords > 0 && <span className="chapter-words">{formatWords(chapter.referenceWords)} words in draft{chapter.budgetWords ? ` · ${formatWords(chapter.budgetWords)} goal` : ""}</span>}
       </div>
       {editableMeta ? (
         <input
@@ -160,6 +189,21 @@ function ChapterHeader({ chapter, session, active }: { chapter: ChapterInfo; ses
               {chapter.referencePath && <option value="drafting">In progress — the draft stays the reference</option>}
               {[...new Set(["drafted", "revised", "final", status])].filter(s => s !== "drafting" || !chapter.referencePath).map(s => <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>)}
             </select>
+          </label>
+          <label>
+            Word goal
+            <input
+              type="number"
+              min={50}
+              step={100}
+              className="chapter-goal-input"
+              value={draftGoal}
+              placeholder={String(chapter.targetWords || 3000)}
+              aria-label="Chapter word goal"
+              onChange={e => setDraftGoal(e.target.value)}
+              onBlur={() => void commitGoal(draftGoal)}
+              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            />
           </label>
         </div>
       )}

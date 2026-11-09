@@ -188,6 +188,10 @@ function LegacyLayout() {
   const hasProject = !!currentProject;
   const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
 
+  useEffect(() => {
+    document.title = currentProject?.name ? `${currentProject.name} · Bookkit` : "Bookkit";
+  }, [currentProject?.name]);
+
   function renderActiveTab() {
     switch (activeTab) {
       case "brief":

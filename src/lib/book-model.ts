@@ -4,6 +4,7 @@
  * Files stay the storage format; nothing in the UI needs to show a path.
  */
 import { parse as parseYaml } from "yaml";
+import { BOOK_FORMS, formMeta, type BookForm, type BookKind } from "./book-config";
 import { splitDocument, markdownToPlain, countWords } from "./markdown-doc";
 
 export interface SourceFile { path: string; content: string; loaded?: boolean; asset?: unknown; version?: number }
@@ -39,6 +40,10 @@ export interface ChapterInfo {
   purpose?: string;
   authorWords: number;
   referenceWords: number;
+  /** Explicit per-chapter word goal from front matter (`draft_budget_words` or `target_words`), if set. */
+  budgetWords?: number;
+  /** Resolved word-count goal for this chapter. */
+  targetWords: number;
   sceneTitles: string[];
 }
 
@@ -61,6 +66,12 @@ export interface Entity {
 export interface BookModel {
   title: string;
   author: string;
+  kind: BookKind;
+  form: BookForm;
+  formLabel: string;
+  formEyebrow: string;
+  targetWords: number;
+  chapterTargetWords: number;
   config: Record<string, any>;
   manuscriptDir: string;
   draftDir?: string;
@@ -302,7 +313,14 @@ export function buildBookModel(files: SourceFile[]): BookModel {
   const sceneFiles = files.filter(f => f.path.startsWith("outline/scenes/") && f.path.endsWith(".md"));
   const numbers = [...new Set([...authors.keys(), ...refs.keys()])].sort((a, b) => a - b);
 
-  const chapters: ChapterInfo[] = numbers.map(n => {
+  const posInt = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  };
+  const explicitTargetWords = posInt(config?.manuscript?.target_words);
+  const explicitChapterWords = posInt(config?.manuscript?.chapter_words);
+
+  const rawChapters = numbers.map(n => {
     const a = authors.get(n);
     const r = refs.get(n);
     const started = !!a && a.meta.status === "drafting";
@@ -316,6 +334,9 @@ export function buildBookModel(files: SourceFile[]): BookModel {
     const partTitle = meta.part_title ? String(meta.part_title) : partKey ? pretty(partKey) : "";
     // headings ("## Scene 2 – The offering") aren't words written
     const words = (f?: SourceFile) => (f ? countWords(markdownToPlain(splitDocument(f.content).body.replace(/^#{1,6}\s.*$/gm, ""))) : 0);
+    const authorWords = words(a?.file);
+    const referenceWords = words(r?.file);
+    const budgetWords = posInt(a?.meta?.draft_budget_words ?? a?.meta?.target_words ?? r?.meta?.draft_budget_words ?? r?.meta?.target_words);
     return {
       number: n,
       title,
@@ -331,11 +352,82 @@ export function buildBookModel(files: SourceFile[]): BookModel {
       scenesPath: scenes?.path,
       outline: outline?.text.trim(),
       purpose: outline?.text.match(/\*\*Purpose:\*\*\s*(.+)/)?.[1]?.trim(),
-      authorWords: words(a?.file),
-      referenceWords: words(r?.file),
+      authorWords,
+      referenceWords,
+      budgetWords,
       sceneTitles: scenes ? sections(splitDocument(scenes.content).body, 2).map(s => s.heading) : [],
     };
   });
+
+  const totalRefWords = rawChapters.reduce((s, c) => s + c.referenceWords, 0);
+  const rawFormStr = String(config?.form ?? (BOOK_FORMS.some(f => f.value === config?.kind) ? config.kind : "")).trim();
+  const kind: BookKind =
+    rawFormStr && BOOK_FORMS.some(f => f.value === rawFormStr)
+      ? formMeta(rawFormStr).kind
+      : (config?.kind ?? config?.companion?.kind) === "nonfiction"
+        ? "nonfiction"
+        : "fiction";
+
+  let inferredForm = rawFormStr;
+  if (!inferredForm || !BOOK_FORMS.some(f => f.value === inferredForm)) {
+    const onePageText = (byPath.get("bible/book-on-one-page.md")?.content ?? "") + "\n" + (byPath.get("README.md")?.content ?? "");
+    if (kind === "nonfiction") {
+      inferredForm = /\b(devotional|readings|prayer)\b/i.test(onePageText) ? "devotional" : /\bmemoir\b/i.test(onePageText) ? "memoir" : "nonfiction";
+    } else if (/\bnovella\b/i.test(onePageText)) {
+      inferredForm = "novella";
+    } else if (/\bnovelette\b/i.test(onePageText)) {
+      inferredForm = "novelette";
+    } else if (/\bshort story\b/i.test(onePageText)) {
+      inferredForm = "short-story";
+    } else if (/\bshort novel\b/i.test(onePageText)) {
+      inferredForm = "short-novel";
+    } else if (totalRefWords > 0) {
+      inferredForm =
+        totalRefWords < 10000
+          ? "short-story"
+          : totalRefWords < 17500
+            ? "novella"
+            : totalRefWords <= 40000
+              ? "novella"
+              : totalRefWords < 55000
+                ? "short-novel"
+                : "novel";
+    } else {
+      inferredForm = "novel";
+    }
+  }
+  const fMeta = formMeta(inferredForm, kind);
+  const expectedChapterCount = Math.max(rawChapters.length, posInt(config?.manuscript?.chapters) ?? 0, 1);
+  const fallbackChapterWords =
+    explicitChapterWords ??
+    (explicitTargetWords ? Math.max(250, Math.round(explicitTargetWords / expectedChapterCount / 50) * 50) : fMeta.defaultChapterWords);
+
+  const chapters: ChapterInfo[] = rawChapters.map(c => {
+    const targetWords =
+      c.budgetWords ??
+      explicitChapterWords ??
+      (c.referenceWords > 0
+        ? Math.max(100, Math.round(c.referenceWords / 50) * 50)
+        : fallbackChapterWords);
+    return { ...c, targetWords };
+  });
+
+  const hasAnyBudget = rawChapters.some(c => c.budgetWords != null);
+  const targetWords =
+    explicitTargetWords ??
+    (hasAnyBudget
+      ? chapters.reduce((s, c) => s + c.targetWords, 0)
+      : explicitChapterWords
+        ? explicitChapterWords * expectedChapterCount
+        : totalRefWords > 0
+          ? Math.max(500, Math.round(totalRefWords / 500) * 500)
+          : fMeta.defaultTargetWords);
+
+  const chapterTargetWords =
+    explicitChapterWords ??
+    (rawChapters.length > 0 && (hasAnyBudget || totalRefWords > 0 || explicitTargetWords != null)
+      ? Math.max(100, Math.round(targetWords / rawChapters.length / 50) * 50)
+      : fMeta.defaultChapterWords);
 
   const companions: CompanionDoc[] = [];
   for (const f of files) {
@@ -362,6 +454,12 @@ export function buildBookModel(files: SourceFile[]): BookModel {
   return {
     title: String(config.title ?? "Untitled book"),
     author: String(config.author ?? ""),
+    kind,
+    form: fMeta.value,
+    formLabel: fMeta.label,
+    formEyebrow: fMeta.eyebrow,
+    targetWords,
+    chapterTargetWords,
     config,
     manuscriptDir,
     draftDir,

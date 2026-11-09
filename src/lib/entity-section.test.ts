@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addSection, entryOps, findSection, removeSection, renameSection, replaceSectionBody, sectionBody, sectionFields } from "./entity-section";
 import { buildBookModel } from "./book-model";
-import { routeToUrl, urlToRoute, viewForPath, bookSlug, bookIdForSlug, FULL_PAGE } from "./book-url";
+import { routeToUrl, urlToRoute, viewForPath, bookSlug, bookIdForSlug, FULL_PAGE, resolveInternalHref, studioDocumentTitle } from "./book-url";
 
 const PAGE = "---\nchecked: 2026-11-08\n---\n\n# Characters\n\nIntro.\n\n## Nora\n\n- **Role:** herder.\n- **Age:** young.\n\nMore about Nora.\n\n## The Owl\n\n```\n## not a heading\n```\n\n## Minor characters\n\nVarious.\n";
 
@@ -80,6 +80,20 @@ describe("book URLs", () => {
     expect(bookSlug(catalog, "bbbbbbbb-2")).toBe("draft-bbbbbbbb");
     expect(bookIdForSlug(catalog, "draft-cccccccc")).toBe("cccccccc-3");
     expect(bookIdForSlug(catalog, "the-owl-at-dusk")).toBe("aaaaaaaa-1");
+  });
+
+  it("resolves relative markdown links and formats browser tab titles for the active book", () => {
+    expect(resolveInternalHref("../bible/characters.md#nora", "manuscript/02-back.md", model)).toEqual({
+      view: "bible",
+      path: "bible/characters.md",
+      anchor: "nora",
+    });
+    expect(studioDocumentTitle("Owl", null, "write", "")).toBe("Owl · Bookkit");
+    expect(studioDocumentTitle("Owl", model, "write", "")).toBe("Owl · Bookkit");
+    expect(studioDocumentTitle("Owl", model, "write", "manuscript/02-back.md")).toBe("Owl · Ch. 2 · Back · Bookkit");
+    expect(studioDocumentTitle("Owl", model, "bible", "bible/characters.md", "nora")).toBe("Owl · Nora · Bookkit");
+    expect(studioDocumentTitle("Owl", model, "plan", "")).toBe("Owl · Plan · Bookkit");
+    expect(studioDocumentTitle("Owl", model, "plan", "@brief")).toBe("Owl · Brief · Bookkit");
   });
 });
 

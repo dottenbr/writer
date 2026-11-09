@@ -6,13 +6,14 @@ import { useEditorBus } from "./editorBus";
 import { Navigator } from "./Navigator";
 import { Toolbar } from "./Toolbar";
 import { ListenBar } from "./ListenBar";
-import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
+import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, openInNewTab, resolveInternalHref, routeToUrl, studioDocumentTitle, urlBookSlug, urlToRoute } from "../../lib/book-url";
 import { useHomeStore } from "../../store/useHomeStore";
 import { canWriteIn, useLibraryStore } from "../../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../../lib/library-host";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } from "./common";
 import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
+import { BOOK_FORMS, formMeta, type BookForm } from "../../lib/book-config";
 import { saveBookDocument, createBook, setAccountPassword } from "../../lib/supabase-service";
 
 /**
@@ -81,7 +82,15 @@ function BookSwitcher() {
           <div className="menu-sep" />
           <div className="menu-label">{here ? "Books in this library" : "Your books"}</div>
           {catalog.filter(p => !here || p.libraryId === here.id).map(p => (
-            <button key={p.id} className={`menu-item ${p.id === currentId ? "current" : ""}`} onClick={() => { setOpen(false); if (p.id !== currentId) void switchProject(p.id); }}>
+            <button key={p.id} className={`menu-item ${p.id === currentId ? "current" : ""}`} onClick={() => {
+              setOpen(false);
+              if (navFlags.openInNewTab) {
+                navFlags.openInNewTab = false;
+                openInNewTab("/" + bookSlug(catalog, p.id));
+                return;
+              }
+              if (p.id !== currentId) void switchProject(p.id);
+            }}>
               <Icon name="book" size={15} />
               <span className="menu-item-text">{p.name}</span>
               {p.role !== "owner" && <span className="menu-meta">{p.role}</span>}
@@ -94,7 +103,7 @@ function BookSwitcher() {
             {others.map(l => <a key={l.id} className="menu-item" href={libraryUrl(l.slug)}><Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span></a>)}
           </>}
           <div className="menu-sep" />
-          <button className="menu-item" onClick={() => { setOpen(false); setCreating(true); }}><Icon name="plus" size={15} /> New book</button>
+          <button data-no-tab className="menu-item" onClick={() => { setOpen(false); setCreating(true); }}><Icon name="plus" size={15} /> New book</button>
         </div>
       )}
       {creating && <NewBookDialog onClose={() => setCreating(false)} />}
@@ -110,12 +119,14 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
   const writable = libraries.filter(canWriteIn);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState(() => prefs().authorName ?? "");
+  const [form, setForm] = useState<BookForm>("novel");
   const [libraryId, setLibraryId] = useState<string>(() => (here && canWriteIn(here) ? here.id : writable[0]?.id ?? ""));
   const library = libraries.find(l => l.id === libraryId);
   const [shelfId, setShelfId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const shelves = [...(library?.shelves ?? [])].sort((a, b) => a.position - b.position);
+  const fm = formMeta(form);
   return (
     <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <form className="dialog" onSubmit={async e => {
@@ -124,7 +135,7 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
         setBusy(true); setError("");
         try {
           writePrefs({ authorName: author.trim() });
-          const id = await createBook(title.trim(), author.trim(), { libraryId: library?.id ?? null, shelfId: shelfId || null });
+          const id = await createBook(title.trim(), author.trim(), { libraryId: library?.id ?? null, shelfId: shelfId || null, form });
           await refreshCatalog();
           const path = "/" + bookSlug(useProjectStore.getState().projectCatalog, id);
           if ((library?.slug ?? null) !== hostLibrary()) { window.location.href = libraryUrl(library?.slug ?? null, path); return; }
@@ -138,6 +149,21 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
         <p className="dialog-sub">You’ll get a manuscript with a first chapter, a story bible, a plan and a style guide, all linked together.</p>
         <label className="field">Title<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="The working title" /></label>
         <label className="field">Author name<input value={author} onChange={e => setAuthor(e.target.value)} placeholder="As it should appear on the cover" /></label>
+        <label className="field">Form / Type
+          <select value={form} onChange={e => setForm(e.target.value as BookForm)}>
+            <optgroup label="Fiction">
+              {BOOK_FORMS.filter(f => f.kind === "fiction").map(f => (
+                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString()} words)</option>
+              ))}
+            </optgroup>
+            <optgroup label="Nonfiction">
+              {BOOK_FORMS.filter(f => f.kind === "nonfiction").map(f => (
+                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString()} words)</option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+        <div className="field-hint">Goal: {fm.defaultTargetWords.toLocaleString()} words for the book (~{fm.defaultChapterWords.toLocaleString()} per chapter). You can adjust this anytime in Brief or Configuration.</div>
         {writable.length > 1 && (
           <label className="field">Library<select value={libraryId} onChange={e => { setLibraryId(e.target.value); setShelfId(""); }}>{writable.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
         )}
@@ -277,13 +303,13 @@ function HoverCard() {
       <div className="hover-card-kind">{KIND_LABEL[entity.kind]}</div>
       <div className="hover-card-name">{entity.name}</div>
       <p>{entity.summary.replace(/^Role:\s*/i, "") || "No description yet."}</p>
-      <div className="hover-card-hint">Click to open in the side panel</div>
+      <div className="hover-card-hint">Click to open in the side panel · Middle-click for a new tab</div>
     </div>
   );
 }
 
 
-type MenuEntry = { label: string; run: () => void; meta?: string; active?: boolean; dot?: string; num?: number } | { heading: string } | { sep: true };
+type MenuEntry = { label: string; run: () => void; meta?: string; active?: boolean; dot?: string; num?: number; noTab?: boolean } | { heading: string } | { sep: true };
 
 /** The sections of the book, each with a menu of what's in it. */
 function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
@@ -319,7 +345,7 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
       { heading: `Chapters · ${model.chapters.length}` },
       ...model.chapters.map(c => ({ label: c.title || `Chapter ${c.number}`, num: c.number, dot: chapterState(c).key, run: () => go(c.authorPath ?? c.currentPath), active: chapterForPath(model.chapters, location.path)?.number === c.number })),
       { sep: true } as const,
-      ...(isOwner ? [{ label: "New chapter…", run: onNewChapter }] : []),
+      ...(isOwner ? [{ label: "New chapter…", run: onNewChapter, noTab: true }] : []),
       { label: "Book configuration", run: () => setView("settings"), active: view === "settings" },
     ] },
     { id: "plan", label: "Plan", icon: "grid", run: () => setView("plan"), items: [
@@ -350,7 +376,7 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
           {open === m.id && (
             <div className="menu menubar-menu" role="menu">
               {m.items.map((it, i) => "sep" in it ? <div key={i} className="menu-sep" /> : "heading" in it ? <div key={i} className="menu-label">{it.heading}</div> : (
-                <button key={i} role="menuitem" className={`menu-item ${it.active ? "current" : ""}`} onClick={() => { setOpen(null); it.run(); }}>
+                <button key={i} role="menuitem" data-no-tab={it.noTab || undefined} className={`menu-item ${it.active ? "current" : ""}`} onClick={() => { setOpen(null); it.run(); }}>
                   {it.num != null && <span className="menu-num">{it.num}</span>}
                   {it.dot && <span className={`status-dot ${it.dot}`} />}
                   <span className="menu-item-text">{it.label}</span>
@@ -370,9 +396,10 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
 
 let firstUrlSync = true;
 
-/** Keep the address bar in step with what's on screen, and follow back/forward. */
+/** Keep the address bar and browser tab title in step with what's on screen, and follow back/forward. */
 function useUrlSync() {
   const catalog = useProjectStore(s => s.projectCatalog);
+  const currentProjectId = useProjectStore(s => s.currentProjectId);
   const switchProject = useProjectStore(s => s.switchProject);
   const bookProject = useBookStore(s => s.projectId);
   const model = useBookStore(s => s.model);
@@ -382,6 +409,12 @@ function useUrlSync() {
   const applied = useRef<string | null>(null);
   const justApplied = useRef(false);
   const replaceNext = useRef(false);
+  const catalogTitle = catalog.find(p => p.id === (bookProject ?? currentProjectId))?.name;
+
+  // Keep the browser tab title reflecting the book and current view/chapter.
+  useEffect(() => {
+    document.title = studioDocumentTitle(catalogTitle, model, view, location.path, location.anchor, visibleChapter);
+  }, [catalogTitle, model, view, location.path, location.anchor, visibleChapter]);
 
   // Opening a book: show the place the address names, if it names this book.
   useEffect(() => {
@@ -570,40 +603,56 @@ export function Studio() {
     return () => window.removeEventListener("keydown", key);
   }, [focusMode, setFocusMode]);
 
-  // Linked text: entity names and chapter anchors navigate.
-  function onClick(e: React.MouseEvent) {
+  // Linked text: entity names, markdown links, and chapter anchors navigate (or open in a new tab on middle-click / Cmd-click).
+  function handleBodyLink(e: React.MouseEvent, forceNewTab: boolean) {
     const target = e.target as HTMLElement;
+    const openTab = forceNewTab || e.metaKey || e.ctrlKey;
+    const catalog = useProjectStore.getState().projectCatalog;
+    const slug = projectId ? bookSlug(catalog, projectId) : "";
+
     const entity = target.closest("[data-entity]") as HTMLElement | null;
-    if (entity && !window.getSelection()?.toString()) { selectEntity(entity.dataset.entity!); return; }
+    if (entity && model && !window.getSelection()?.toString()) {
+      const ent = model.entities.find(x => x.id === entity.dataset.entity);
+      if (openTab && ent && slug) {
+        e.preventDefault();
+        openInNewTab(routeToUrl(slug, { view: "bible", path: ent.path, anchor: ent.slug }, model));
+        return;
+      }
+      if (!forceNewTab) selectEntity(entity.dataset.entity!);
+      return;
+    }
+
     const link = target.closest(".doc-prose a[href], .md a[href]") as HTMLAnchorElement | null;
     if (link && model) {
       const href = link.getAttribute("href") ?? "";
       const editing = !!target.closest("[contenteditable=true]");
       if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
         e.preventDefault();
-        if (/^(?:https?|mailto):/i.test(href) && (!editing || e.metaKey || e.ctrlKey)) {
-          window.open(href, "_blank", "noopener,noreferrer");
+        if (/^(?:https?|mailto):/i.test(href) && (forceNewTab || !editing || e.metaKey || e.ctrlKey)) {
+          openInNewTab(href);
         }
         return;
       }
       e.preventDefault();
-      if (editing && !(e.metaKey || e.ctrlKey)) return;
-      const [file, hash] = href.split("#");
-      const base = location.path.split("/").slice(0, -1);
-      for (const part of file.split("/")) {
-        if (part === "..") base.pop();
-        else if (part && part !== ".") base.push(part);
+      if (!forceNewTab && editing && !(e.metaKey || e.ctrlKey)) return;
+      const route = resolveInternalHref(href, location.path, model);
+      if (route) {
+        if (openTab && slug) openInNewTab(routeToUrl(slug, route, model));
+        else go(route.path, { anchor: route.anchor });
       }
-      const resolved = file ? base.join("/") : location.path;
-      const chapter = chapterForPath(model.chapters, resolved);
-      if (chapter || model.companions.some(d => d.path === resolved)) go(resolved, { anchor: hash || undefined });
       return;
     }
+
     const anchor = target.closest("[data-chapters]") as HTMLElement | null;
-    if (anchor && model && (e.metaKey || e.ctrlKey || !target.closest("[contenteditable=true]"))) {
+    if (anchor && model && (forceNewTab || e.metaKey || e.ctrlKey || !target.closest("[contenteditable=true]"))) {
       const n = anchorNumbers(anchor.dataset.chapters!)[0];
       const chapter = model.chapters.find(c => c.number === n);
       if (!chapter) return;
+      if (openTab && slug) {
+        e.preventDefault();
+        openInNewTab(routeToUrl(slug, { view: "write", path: chapter.authorPath ?? chapter.currentPath }, model));
+        return;
+      }
       const block = anchor.closest("p,li,td,blockquote") ?? anchor.parentElement;
       let find: string | undefined;
       if (block) {
@@ -662,7 +711,7 @@ export function Studio() {
           <UserMenu theme={theme} setTheme={setTheme} />
         </div>
       </header>
-      <div className="studio-body" onClick={onClick}>
+      <div className="studio-body" onClick={e => handleBodyLink(e, false)} onAuxClick={e => { if (e.button === 1) handleBodyLink(e, true); }}>
         {scope && navOpen && <Navigator scope={scope} onNewChapter={() => setNewChapter(true)} />}
         <main className="studio-main">
           {isDoc && <Toolbar />}

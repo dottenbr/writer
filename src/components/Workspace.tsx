@@ -7,7 +7,7 @@ import { generateAndCacheCoverThumbnail, inverseTextColorForTone, readCachedCove
 import { useLibraryStore, canWriteIn } from "../store/useLibraryStore";
 import { hostLibrary, libraryUrl } from "../lib/library-host";
 import { LibrarySettings } from "./LibrarySettings";
-import { bookSlug, navFlags } from "../lib/book-url";
+import { bookSlug, navFlags, openInNewTab } from "../lib/book-url";
 import { NewBookDialog, UserMenu, useTheme } from "./studio/Studio";
 import { formatWords, Icon } from "./studio/common";
 
@@ -327,6 +327,11 @@ function useOpenBook() {
   return (b: WorkspaceBook) => {
     const slug = libraries.find(l => l.id === b.library_id)?.slug ?? null;
     const path = "/" + bookSlug(catalog, b.project_id);
+    if (navFlags.openInNewTab) {
+      navFlags.openInNewTab = false;
+      openInNewTab(slug !== hostLibrary() ? libraryUrl(slug, path) : path);
+      return;
+    }
     if (slug !== hostLibrary()) { window.location.href = libraryUrl(slug, path); return; }
     navFlags.openLastPlace = true;
     window.history.pushState(null, "", path);
@@ -421,7 +426,7 @@ function LibraryHome({ library }: { library: Library }) {
           <h1>{library.name}</h1>
           {library.description && <p className="ws-sub">{library.description}</p>}
           <p className="ws-sub">{latest ? <>Hello {firstName(all, email)}. Last worked on: <button className="link-btn inline" onClick={() => open(latest)}>{latest.name}</button>, {ago(latest.last_worked_at).toLowerCase()}.</> : all.length ? "" : "No books here yet."}</p>
-          {library.pending_owner && <div className="ws-pending">This library is waiting for <strong>{library.pending_owner}</strong>. It becomes theirs the first time they sign in. <button className="link-btn inline" onClick={() => setSettings(true)}>Invite them</button></div>}
+          {library.pending_owner && <div className="ws-pending">This library is waiting for <strong>{library.pending_owner}</strong>. It becomes theirs the first time they sign in. <button data-no-tab className="link-btn inline" onClick={() => setSettings(true)}>Invite them</button></div>}
         </section>
         {error && <div className="inline-error" role="alert">Couldn’t load the books: {error}</div>}
         {!books && !error && <div className="studio-message"><span className="spinner" /> Loading the shelves…</div>}

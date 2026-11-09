@@ -49,6 +49,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (unsub) unsub();
 
     await sbSignOut();
+    // Nothing from this account stays in the browser.
+    const [{ clearCaches }, { forgetBooks, useBookStore }] = await Promise.all([import("../lib/local-cache"), import("./useBookStore")]);
+    useBookStore.getState().unload();
+    forgetBooks();
+    await clearCaches();
     set({
       userId: null,
       userEmail: null,

@@ -11,6 +11,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { marked } from "marked";
 import { CHAPTER_ANCHOR, type Entity } from "./book-model";
 import { escapeHtml, isSafeHref } from "./markdown-doc";
+import { MARK_CLASS, pandocMarks } from "./pandoc-marks";
 
 /** Scene breaks and rules keep the exact markup they were written with. */
 const SceneBreak = HorizontalRule.extend({
@@ -97,6 +98,10 @@ function decorationsForBlock(node: PMNode, pos: number, config: LinkConfig, deco
   });
   if (!text) return;
   const range = (start: number, end: number) => [offsets[start], offsets[end - 1] + 1] as const;
+  for (const m of pandocMarks(text)) {
+    const [from, to] = range(m.from, m.to);
+    decos.push(Decoration.inline(from, to, { class: MARK_CLASS[m.kind] }));
+  }
   if (config.entities?.regex && node.type.name !== "heading") {
     for (const m of text.matchAll(config.entities.regex)) {
       const e = config.entities.byAlias.get(m[0]);

@@ -4,7 +4,7 @@ import { useBookStore } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
 import { chapterForPath, Icon, KIND_LABEL, useAccess, useEntityMatcher, initials } from "./common";
 import { renderMarkdown, splitDocument, markdownToPlain } from "../../lib/markdown-doc";
-import { citedChapters, mentionsIn, sections, type ChapterInfo, type Entity } from "../../lib/book-model";
+import { citedChapters, mentionsIn, scenesPathFor, sections, type ChapterInfo, type Entity } from "../../lib/book-model";
 import { createThread, replyThread, resolveThread, decideSuggestion, type Suggestion } from "../../lib/bookkit-collaboration";
 import { completeText, effectiveProvider } from "../../lib/llm-service";
 import { useProjectStore } from "../../store/useProjectStore";
@@ -73,18 +73,18 @@ function ChapterContext({ chapter }: { chapter: ChapterInfo }) {
         <section className="panel-block">
           <div className="panel-label-row">
             <span className="panel-label">Chapter plan</span>
-            <button className="link-btn" onClick={() => go("outline/chapters.md", { anchor: slugHead(model, chapter) })}>Edit in outline</button>
+            <button className="link-btn" onClick={() => go(scenesPathFor(chapter), { view: "plan" })}>Edit plan</button>
           </div>
           <Markdown text={chapter.outline} className="plan-md" />
         </section>
       ) : (
-        <section className="panel-block muted-block">No plan for this chapter yet. Add a <em>{chapter.number}. {chapter.title}</em> section to the chapter outline.</section>
+        <section className="panel-block muted-block">No plan for this chapter yet. <button className="link-btn inline" onClick={() => go(scenesPathFor(chapter), { view: "plan" })}>Plan this chapter</button></section>
       )}
       {scenes.length > 0 && (
         <section className="panel-block">
           <div className="panel-label-row">
             <span className="panel-label">Scene cards · {scenes.length}</span>
-            <button className="link-btn" onClick={() => go(chapter.scenesPath!)}>Open cards</button>
+            <button className="link-btn" onClick={() => go(scenesPathFor(chapter), { view: "plan" })}>Edit scenes</button>
           </div>
           <div className="scene-list">
             {scenes.map((s, i) => (
@@ -129,11 +129,6 @@ function ChapterContext({ chapter }: { chapter: ChapterInfo }) {
       )}
     </div>
   );
-}
-
-function slugHead(model: { chapters: ChapterInfo[] }, c: ChapterInfo) {
-  void model;
-  return `${c.number}-${c.title}`.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[“”"'’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function DocContext({ path }: { path: string }) {
@@ -324,7 +319,7 @@ function CommentsTab({ path }: { path: string }) {
           <div className="panel-label">Suggested edits · {suggestions.length}</div>
           {suggestions.map((s: Suggestion) => (
             <article key={s.id} className="thread suggestion">
-              <div className="thread-head"><span className="avatar">{initials(name(s.profiles))}</span><strong>{name(s.profiles)}</strong><time>{new Date(s.updated_at).toLocaleDateString()}</time></div>
+              <div className="thread-head"><span className="avatar">{initials(name(s.profiles))}</span><strong>{name(s.profiles)}</strong><time>{new Date(s.updated_at).toLocaleDateString("en-GB")}</time></div>
               <Changes before={s.base?.content ?? ""} after={s.proposed_content} />
               <div className="thread-actions">
                 {isOwner && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => void act(() => decideSuggestion(s, "accepted"))}>Accept</button>}
@@ -378,7 +373,7 @@ function CommentsTab({ path }: { path: string }) {
             {t.suggestion_id && <div className="panel-note">On a suggested edit</div>}
             {t.bookkit_messages.map(m => (
               <div key={m.id} className="thread-msg">
-                <div className="thread-head"><span className="avatar">{initials(name(m.profiles))}</span><strong>{name(m.profiles)}</strong><time>{new Date(m.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time></div>
+                <div className="thread-head"><span className="avatar">{initials(name(m.profiles))}</span><strong>{name(m.profiles)}</strong><time>{new Date(m.created_at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</time></div>
                 <p>{m.body}</p>
               </div>
             ))}

@@ -567,11 +567,11 @@ Nineteen years old in the eighty-second summer. Apprenticed at the lower forge i
       {
         type: "h2",
         id: "scene-board",
-        text: "The Scene Board (`/<book>/chapter/N/scenes`)",
+        text: "The chapter plan (`/<book>/chapter/N/plan`)",
       },
       {
         type: "p",
-        text: "Click **Scenes** on any chapter to open its dedicated Scene Board. Each scene card in `outline/scenes/NN-*.md` is rendered as an interactive card where you can click any field to edit:",
+        text: "In **Plan**, click any chapter to open its plan: the chapter's section of `outline/chapters.md`, edited in place, and its scene cards from `outline/scenes/NN-*.md`. Add a scene with one click; each card is interactive and you click any field to edit:",
       },
       {
         type: "list",

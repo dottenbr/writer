@@ -217,7 +217,7 @@ function ExpandedChapter({ chapter, canEdit }: { chapter: Chapter; canEdit: bool
             <span>{chapter.scenes.length} scene{chapter.scenes.length !== 1 ? "s" : ""}</span>
           )}
           {chapter.wordCount > 0 && (
-            <span>{chapter.wordCount.toLocaleString()} words</span>
+            <span>{chapter.wordCount.toLocaleString("en-US")} words</span>
           )}
         </div>
         <button
@@ -338,7 +338,7 @@ function SortableChapterCard({
           )}
           {!isExpanded && chapter.wordCount > 0 && (
             <span className="plan-chapter-meta-hint">
-              {chapter.wordCount.toLocaleString()}w
+              {chapter.wordCount.toLocaleString("en-US")}w
             </span>
           )}
           <button
@@ -579,7 +579,7 @@ export function ChapterPlan() {
             </div>
             <span className="plan-header-stats">
               {project.chapters.length} section{project.chapters.length !== 1 ? "s" : ""}
-              {totalWords > 0 && <>&ensp;&middot;&ensp;{totalWords.toLocaleString()} words</>}
+              {totalWords > 0 && <>&ensp;&middot;&ensp;{totalWords.toLocaleString("en-US")} words</>}
             </span>
           </div>
           {!canEdit && (

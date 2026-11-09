@@ -7,6 +7,7 @@ import { planReorder, type ReorderPlan } from "../../lib/reorder";
 import { applyBookReorder } from "../../lib/supabase-service";
 import type { ChapterInfo } from "../../lib/book-model";
 import { chapterState, formatWords, Icon, useAccess } from "./common";
+import { scenesPathFor } from "../../lib/book-model";
 
 function Row({ id, c, canDrag, onOpen }: { id: number; c: ChapterInfo; canDrag: boolean; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !canDrag });
@@ -73,9 +74,7 @@ export function PlanList() {
     setBusy("Starting…"); setError("");
     try {
       await applyBookReorder(projectId, pending.plan, new Map(files.map(f => [f.path, f.version])), setBusy);
-      const store = useBookStore.getState();
-      store.unload();
-      await store.load(projectId);
+      await useBookStore.getState().revalidate();
       useBookStore.getState().setView("plan");
       setPending(null); setOrder(null);
     } catch (e) { setError((e as Error).message); setOrder(null); setPending(null); } finally { setBusy(""); }
@@ -113,7 +112,7 @@ export function PlanList() {
                 {g.numbers.map(n => {
                   const c = byNumber.get(n)!;
                   const position = model.chapters[numbers.indexOf(n)]?.number ?? n;
-                  return <Row key={n} id={n} c={position === n ? c : { ...c, number: position }} canDrag={isOwner && !busy && !pending} onOpen={() => go(c.authorPath ?? c.currentPath)} />;
+                  return <Row key={n} id={n} c={position === n ? c : { ...c, number: position }} canDrag={isOwner && !busy && !pending} onOpen={() => go(scenesPathFor(c), { view: "plan" })} />;
                 })}
               </SortableContext>
             )}

@@ -110,5 +110,5 @@ export function initials(name: string) {
 }
 
 export function formatWords(n: number) {
-  return n >= 10000 ? `${Math.round(n / 1000)}k` : n.toLocaleString();
+  return n >= 10000 ? `${Math.round(n / 1000)}k` : n.toLocaleString("en-US");
 }

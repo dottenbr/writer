@@ -40,10 +40,14 @@ export function Toolbar() {
   useEffect(() => {
     if (!editor) return;
     editor.on("transaction", rerender);
-    return () => { editor.off("transaction", rerender); };
+    editor.on("focus", rerender);
+    editor.on("blur", rerender);
+    return () => { editor.off("transaction", rerender); editor.off("focus", rerender); editor.off("blur", rerender); };
   }, [editor]);
 
   const can = !!editor && editor.isEditable;
+  // Formatting shows as "on" only while you're in the text, not for wherever the cursor was left.
+  const isOn = (name: string) => !!editor && editor.isFocused && editor.isActive(name);
   const chain = () => editor!.chain().focus();
   const block = !editor ? "p" : editor.isActive("heading", { level: 2 }) ? "h2" : editor.isActive("heading", { level: 3 }) ? "h3" : editor.isActive("heading", { level: 4 }) ? "h4" : "p";
 
@@ -76,15 +80,15 @@ export function Toolbar() {
       </select>
       <span className="tb-sep" />
       <div className="tb-group">
-        <Btn icon="bold" label="Bold" shortcut={`${mod}B`} disabled={!can} active={editor?.isActive("bold")} onClick={() => chain().toggleBold().run()} />
-        <Btn icon="italic" label="Italic" shortcut={`${mod}I`} disabled={!can} active={editor?.isActive("italic")} onClick={() => chain().toggleItalic().run()} />
-        <Btn icon="strike" label="Strikethrough" disabled={!can} active={editor?.isActive("strike")} onClick={() => chain().toggleStrike().run()} />
+        <Btn icon="bold" label="Bold" shortcut={`${mod}B`} disabled={!can} active={isOn("bold")} onClick={() => chain().toggleBold().run()} />
+        <Btn icon="italic" label="Italic" shortcut={`${mod}I`} disabled={!can} active={isOn("italic")} onClick={() => chain().toggleItalic().run()} />
+        <Btn icon="strike" label="Strikethrough" disabled={!can} active={isOn("strike")} onClick={() => chain().toggleStrike().run()} />
       </div>
       <span className="tb-sep" />
       <div className="tb-group">
-        <Btn icon="bullets" label="Bulleted list" disabled={!can} active={editor?.isActive("bulletList")} onClick={() => chain().toggleBulletList().run()} />
-        <Btn icon="numbers" label="Numbered list" disabled={!can} active={editor?.isActive("orderedList")} onClick={() => chain().toggleOrderedList().run()} />
-        <Btn icon="quote" label="Block quote" disabled={!can} active={editor?.isActive("blockquote")} onClick={() => chain().toggleBlockquote().run()} />
+        <Btn icon="bullets" label="Bulleted list" disabled={!can} active={isOn("bulletList")} onClick={() => chain().toggleBulletList().run()} />
+        <Btn icon="numbers" label="Numbered list" disabled={!can} active={isOn("orderedList")} onClick={() => chain().toggleOrderedList().run()} />
+        <Btn icon="quote" label="Block quote" disabled={!can} active={isOn("blockquote")} onClick={() => chain().toggleBlockquote().run()} />
         <Btn icon="divider" label="Scene break" disabled={!can} onClick={() => chain().setHorizontalRule().run()} />
       </div>
       <span className="tb-sep" />
@@ -98,7 +102,7 @@ export function Toolbar() {
       </button>
       <div className="tb-spacer" />
       {suggesting && <span className="mode-pill" title="Your edits are saved as suggestions for the author to accept or reject">Suggesting</span>}
-      {saveLabel && <span className={`save-state ${readOnly ? "readonly" : state}`} aria-live="polite" title={session?.error || undefined}>{readOnly ? null : state === "saving" ? <span className="spinner tiny" /> : state === "error" ? "!" : <Icon name="check" size={13} />} {saveLabel}</span>}
+      {saveLabel && <span className={`save-state ${readOnly ? "readonly" : state}`} aria-live="polite" title={session?.error || saveLabel}>{readOnly ? null : state === "saving" ? <span className="spinner tiny" /> : state === "error" ? "!" : <Icon name="check" size={13} />} {saveLabel}</span>}
       <div className="tb-size" role="group" aria-label="Reading comfort">
         <select
           className="tb-font-select"

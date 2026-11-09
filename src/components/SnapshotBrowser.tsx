@@ -91,14 +91,14 @@ export function SnapshotBrowser() {
               <div className="snapshot-row-info">
                 <span className="snapshot-message">{snap.message}</span>
                 <span className="snapshot-date">
-                  {new Date(snap.date).toLocaleDateString(undefined, {
+                  {new Date(snap.date).toLocaleDateString("en-GB", {
                     month: "short",
                     day: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
                   {snap.wordCount > 0 && (
-                    <> &middot; {snap.wordCount.toLocaleString()} words</>
+                    <> &middot; {snap.wordCount.toLocaleString("en-US")} words</>
                   )}
                 </span>
               </div>

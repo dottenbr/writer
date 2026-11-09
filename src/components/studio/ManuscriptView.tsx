@@ -89,7 +89,7 @@ function TitlePage() {
         </div>
         {next && (
           <button className="btn btn-primary title-page-cta" onClick={() => go(next.authorPath ?? next.currentPath)}>
-            <Icon name="pen" size={15} /> {next.started ? "Continue" : next.authorPath ? "Open" : "Begin"} chapter {next.number}{next.title ? ` · ${next.title}` : ""}
+            <Icon name="pen" size={15} /> <span className="title-page-cta-text">{next.started ? "Continue" : next.authorPath ? "Open" : "Begin"} chapter {next.number}{next.title ? ` · ${next.title}` : ""}</span>
           </button>
         )}
         {activeItem && (

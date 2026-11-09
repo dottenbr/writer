@@ -3,7 +3,7 @@ import { useProjectStore } from "../../store/useProjectStore";
 import { useAuthStore } from "../../store/useAuthStore";
 import { prefs, useBookStore, writePrefs, type View } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
-import { Navigator } from "./Navigator";
+import { Navigator, navScopeFor } from "./Navigator";
 import { Toolbar } from "./Toolbar";
 import { ListenBar } from "./ListenBar";
 import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, openInNewTab, resolveInternalHref, routeToUrl, studioDocumentTitle, urlBookSlug, urlToRoute } from "../../lib/book-url";
@@ -33,6 +33,15 @@ function lazyView<T>(load: () => Promise<T>) {
     throw error;
   }) as Promise<any>);
 }
+/** Every view's code, fetched once the book is open so switching sections never waits. */
+const VIEW_CHUNKS = [() => import("./ManuscriptView"), () => import("./CompanionView"), () => import("./ContextPanel"), () => import("./Boards"), () => import("./BiblePages"), () => import("./ChapterPlanPage"), () => import("./TimelinePage"), () => import("./BookSettings"), () => import("../Inspiration"), () => import("./BriefPage")];
+let viewsPreloaded = false;
+function preloadViews() {
+  if (viewsPreloaded) return;
+  viewsPreloaded = true;
+  const run = () => VIEW_CHUNKS.forEach(load => void load().catch(() => { /* loaded on demand instead */ }));
+  if ("requestIdleCallback" in window) (window as any).requestIdleCallback(run, { timeout: 2500 }); else setTimeout(run, 800);
+}
 const ManuscriptView = lazyView(() => import("./ManuscriptView").then(m => ({ default: m.ManuscriptView })));
 const CompanionView = lazyView(() => import("./CompanionView").then(m => ({ default: m.CompanionView })));
 const ContextPanel = lazyView(() => import("./ContextPanel").then(m => ({ default: m.ContextPanel })));
@@ -40,7 +49,7 @@ const BibleBoard = lazyView(() => import("./Boards").then(m => ({ default: m.Bib
 const PlanBoard = lazyView(() => import("./Boards").then(m => ({ default: m.PlanBoard })));
 const EntityIndex = lazyView(() => import("./BiblePages").then(m => ({ default: m.EntityIndex })));
 const EntityPage = lazyView(() => import("./BiblePages").then(m => ({ default: m.EntityPage })));
-const SceneBoard = lazyView(() => import("./SceneBoard").then(m => ({ default: m.SceneBoard })));
+const ChapterPlanPage = lazyView(() => import("./ChapterPlanPage").then(m => ({ default: m.ChapterPlanPage })));
 const TimelinePage = lazyView(() => import("./TimelinePage").then(m => ({ default: m.TimelinePage })));
 const BookSettings = lazyView(() => import("./BookSettings").then(m => ({ default: m.BookSettings })));
 const Inspiration = lazyView(() => import("../Inspiration").then(m => ({ default: m.Inspiration })));
@@ -157,17 +166,17 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
           <select value={form} onChange={e => setForm(e.target.value as BookForm)}>
             <optgroup label="Fiction">
               {BOOK_FORMS.filter(f => f.kind === "fiction").map(f => (
-                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString()} words)</option>
+                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString("en-US")} words)</option>
               ))}
             </optgroup>
             <optgroup label="Nonfiction">
               {BOOK_FORMS.filter(f => f.kind === "nonfiction").map(f => (
-                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString()} words)</option>
+                <option key={f.value} value={f.value}>{f.label} ({f.defaultTargetWords.toLocaleString("en-US")} words)</option>
               ))}
             </optgroup>
           </select>
         </label>
-        <div className="field-hint">Goal: {fm.defaultTargetWords.toLocaleString()} words for the book (~{fm.defaultChapterWords.toLocaleString()} per chapter). You can adjust this anytime in Brief or Configuration.</div>
+        <div className="field-hint">Goal: {fm.defaultTargetWords.toLocaleString("en-US")} words for the book (~{fm.defaultChapterWords.toLocaleString("en-US")} per chapter). You can adjust this anytime in Brief or Configuration.</div>
         {writable.length > 1 && (
           <label className="field">Library<select value={libraryId} onChange={e => { setLibraryId(e.target.value); setShelfId(""); }}>{writable.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
         )}
@@ -649,12 +658,13 @@ export function Studio() {
   const [theme, setTheme] = useTheme();
   const { role } = useAccess();
   const library = useLibraryStore(s => s.current());
-  const libraries = useLibraryStore(s => s.libraries);
+  const librariesFresh = useLibraryStore(s => s.fresh);
   const loadLibraries = useLibraryStore(s => s.load);
-  useEffect(() => { if (!libraries) void loadLibraries(); }, [libraries, loadLibraries]);
+  useEffect(() => { if (!librariesFresh) void loadLibraries(); }, [librariesFresh, loadLibraries]);
   useUrlSync();
 
   useEffect(() => { if (projectId) void load(projectId); }, [projectId, load]);
+  useEffect(() => { if (model) preloadViews(); }, [model]);
   useEffect(() => {
     if (view !== "write") document.querySelector(".main-scroll")?.scrollTo({ top: 0 });
   }, [view]);
@@ -760,7 +770,7 @@ export function Studio() {
     isDoc = path !== "@brief";
   } else if (view === "plan") {
     const scenes = path.startsWith("outline/scenes/");
-    content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : scenes ? <SceneBoard path={path} anchor={location.anchor} /> : <CompanionView />;
+    content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : scenes ? <ChapterPlanPage path={path} anchor={location.anchor} /> : <CompanionView />;
     isDoc = !!path && path !== "@brief" && !scenes;
   } else if (view === "bible") {
     if (!path) content = <BibleBoard />;
@@ -770,7 +780,7 @@ export function Studio() {
     else content = <CompanionView />;
     isDoc = !!path && (!entityFile || !!location.anchor) && !(timelineFile && location.anchor !== FULL_PAGE);
   }
-  const scope = view === "write" || view === "plan" || view === "bible" ? view : null;
+  const scope = navScopeFor(view, path, model.companions.find(d => d.path === path)?.group);
   const showPanel = isDoc || (view === "write" && path !== "@brief");
 
   return (
@@ -799,7 +809,7 @@ export function Studio() {
           {isDoc && <Toolbar />}
           <div className="main-scroll">
             <ErrorBoundary resetKey={`${view}:${location.path}:${location.nonce}`}>
-              <Suspense fallback={<div className="studio-message"><span className="spinner" /></div>}>
+              <Suspense fallback={<div className="studio-message quiet"><span className="spinner" /></div>}>
                 {content}
                 {view === "inspiration" && <div className="inspiration-host"><Inspiration /></div>}
                 {view === "settings" && <BookSettings />}

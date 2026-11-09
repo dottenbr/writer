@@ -271,8 +271,10 @@ kbd { font-family: var(--ui); font-size: 11px; color: var(--ink-3); border: 1px 
 .doc-prose { font: 18px/1.75 var(--prose); color: var(--ink); outline: none; caret-color: var(--accent); font-variant-ligatures: common-ligatures; hyphens: manual; overflow-wrap: break-word; }
 .doc-prose.static { cursor: text; }
 .doc-prose p { margin: 0 0 1em; }
-.chapter .doc-prose p { margin: 0; text-indent: 1.5em; }
-.chapter .doc-prose p:first-child, .chapter .doc-prose hr + p, .chapter .doc-prose h2 + p, .chapter .doc-prose h3 + p, .chapter .doc-prose blockquote + p, .chapter .doc-prose .raw-md + p { text-indent: 0; }
+/* Book convention: only a paragraph that follows another paragraph is indented. The first one of a chapter,
+   and the first after a scene break, heading, scene card, quote or list, starts flush. */
+.chapter .doc-prose p { margin: 0; text-indent: 0; }
+.chapter .doc-prose p + p { text-indent: 1.5em; }
 .doc-prose h1, .doc-prose h2, .doc-prose h3, .doc-prose h4 { font-family: var(--prose); color: var(--ink); line-height: 1.3; }
 .doc-prose h1 { font-size: 1.6em; margin: 1.4em 0 .5em; }
 .doc-prose h2 { font-size: 1.32em; font-weight: 600; margin: 1.7em 0 .5em; }
@@ -988,23 +990,23 @@ input.tl-period-title:focus { background: var(--surface); box-shadow: 0 0 0 2px 
 .ws-cover.has-art[data-tone="light"] span { color: #141312; text-shadow: 0 1px 8px rgba(255,255,255,.94), 0 0 3px rgba(255,255,255,.98); }
 .ws-cover.has-art[data-tone="dark"] span { color: #ffffff; text-shadow: 0 1px 8px rgba(0,0,0,.90), 0 0 3px rgba(0,0,0,.96); }
 .ws-book-body { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; }
-.ws-book-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ws-book-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-right: 30px; }
 .ws-book-head { min-width: 0; flex: 1; }
-.ws-book-title-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.ws-book-title { font: 600 21px/1.2 var(--display); overflow: hidden; text-overflow: ellipsis; }
+.ws-book-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font: 600 21px/1.2 var(--display); overflow-wrap: anywhere; }
 .ws-book.featured .ws-book-title { font-size: 26px; }
-.ws-book-form { font: 600 11px/1.3 var(--ui); letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-softer); border: 1px solid var(--accent-soft); padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-.ws-book-meta { font: 12.5px var(--ui); color: var(--ink-3); margin-top: 4px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ws-book-form { font: 600 10.5px/1.3 var(--ui); letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-softer); border: 1px solid var(--accent-soft); padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.ws-book-meta { font: 12.5px var(--ui); color: var(--ink-3); margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .ws-role { text-transform: capitalize; background: var(--surface-3); border-radius: 10px; padding: 0 7px; color: var(--ink-2); }
 .ws-continue { pointer-events: none; flex: none; }
 .ws-progress { display: flex; flex-direction: column; gap: 6px; font: 13px var(--ui); margin-top: auto; }
-.ws-progress-row { display: flex; justify-content: space-between; gap: 10px; }
+.ws-progress-row { display: flex; justify-content: space-between; gap: 10px; white-space: nowrap; }
 .ws-progress-row.small { font-size: 12px; }
+.ws-progress-note { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-progress-row strong { font-variant-numeric: tabular-nums; }
 .ws-progress-bar { height: 6px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
 .ws-progress-bar span { display: block; height: 100%; background: var(--written, var(--accent)); border-radius: 4px; min-width: 0; }
 .ws-book-foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
-.ws-last { display: flex; flex-direction: column; font: 12.5px/1.45 var(--ui); min-width: 0; }
+.ws-last { display: flex; flex-direction: column; font: 12.5px/1.45 var(--ui); min-width: 0; flex: 1; }
 .ws-last-label { font: 600 10.5px var(--ui); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
 .ws-spark { display: flex; align-items: flex-end; gap: 2px; height: 30px; flex: none; }
 .ws-bar { width: 4px; height: 3px; border-radius: 2px 2px 0 0; background: var(--surface-3); }
@@ -1067,7 +1069,7 @@ a.menu-item { text-decoration: none; }
 .ws-book-menu { position: absolute; top: 12px; right: 12px; }
 .ws-book-menu .icon-btn { background: var(--surface); }
 .ws-book-menu .menu { top: 36px; min-width: 230px; }
-.ws-book.featured .ws-continue { margin-right: 36px; }
+.ws-book.featured .ws-book-head-row { padding-right: 36px; }
 .hide-sm { display: inline; }
 .slug-field { display: flex; align-items: center; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .slug-field input { border: 0 !important; border-radius: 0 !important; flex: 1; min-width: 0; box-shadow: none !important; }
@@ -1219,8 +1221,7 @@ a.menu-item { text-decoration: none; }
   .toolbar .tb-spacer { display: none; }
   .toolbar .tb-size, .toolbar .save-state { display: none; }
   .studio.focus { grid-template-rows: 0 minmax(0, 1fr); }
-  .ws-book.featured .ws-book-head { flex-wrap: wrap; gap: 8px; }
-  .ws-book.featured .ws-book-title { flex: 1 1 180px; }
+  .ws-book.featured .ws-book-head-row { flex-wrap: wrap; gap: 8px; }
 }
 @media (max-width: 760px) { .toolbar .tb-sep { display: none; } .toolbar .tb-group { gap: 0; } }
 
@@ -5159,151 +5160,152 @@ a.docs-card:hover {
   font-weight: 600;
 }
 
-.ws-inbox {
-  border-color: color-mix(in srgb, var(--comment-strong) 55%, var(--line-2));
-}
-.ws-inbox-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-.ws-inbox-title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.ws-inbox-sub {
-  font: 12.5px/1.4 var(--ui);
-  color: var(--ink-3);
-}
-.ws-inbox-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--surface-2);
-  padding: 3px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-}
-.ws-inbox-tab {
-  border: 0;
-  background: transparent;
-  color: var(--ink-2);
-  font: 500 12px/1 var(--ui);
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.ws-inbox-tab.on {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  font-weight: 600;
-}
-.ws-inbox-empty {
-  padding: 14px 4px 4px;
-  font: 13.5px var(--ui);
-}
-.ws-inbox-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.ws-inbox-item {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: var(--surface-2);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: border-color 0.14s ease, background 0.14s ease;
-}
-.ws-inbox-item.needs-attention {
-  border-color: var(--comment-strong);
-  background: color-mix(in srgb, var(--comment) 28%, var(--surface));
-}
-.ws-inbox-item-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.ws-inbox-item-where {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font: 12.5px var(--ui);
-}
-.ws-inbox-book {
-  font-weight: 600;
-  color: var(--ink);
-}
-.ws-inbox-sep {
-  color: var(--ink-4);
-}
-.ws-inbox-path {
-  color: var(--ink-2);
-}
-.ws-inbox-status {
-  font: 600 11px/1.3 var(--ui);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-}
-.ws-inbox-status.replied {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.ws-inbox-status.new {
-  background: var(--comment);
-  border-color: var(--comment-strong);
-  color: var(--ink);
-}
-.ws-inbox-time {
-  font: 11.5px var(--ui);
-  color: var(--ink-3);
-}
-.ws-inbox-quote {
-  margin: 0;
-  padding: 6px 10px;
-  border-left: 3px solid var(--comment-strong);
-  background: var(--comment);
-  border-radius: 0 6px 6px 0;
-  font: italic 13px/1.45 var(--prose);
-  color: var(--ink);
-}
-.ws-inbox-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.ws-inbox-msg {
-  font: 13.5px/1.45 var(--ui);
-  color: var(--ink-2);
-}
-.ws-inbox-msg strong {
-  color: var(--ink);
-}
-.ws-inbox-reply-preview {
-  padding-left: 10px;
-  border-left: 2px solid var(--line-2);
-}
-.ws-inbox-item-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-top: 2px;
-}
+.ws-inbox { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-bottom: 26px; }
+.ws-inbox-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.ws-inbox-head .ws-section-head { margin-bottom: 0; }
+.ws-inbox-tabs { display: inline-flex; align-items: center; gap: 2px; background: var(--surface-2); padding: 3px; border-radius: 9px; border: 1px solid var(--line); }
+.ws-inbox-tab { border: 0; background: transparent; color: var(--ink-2); font: 500 12.5px/1 var(--ui); padding: 6px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.ws-inbox-tab .muted { margin-left: 2px; }
+.ws-inbox-tab.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); font-weight: 600; }
+.ws-inbox-empty { display: flex; align-items: center; gap: 8px; font: 13.5px var(--ui); padding: 2px 0; }
+.ws-inbox-list { display: flex; flex-direction: column; gap: 10px; }
+.ws-inbox-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: border-color .14s ease, background .14s ease; }
+.ws-inbox-item:hover { border-color: var(--line-2); background: var(--surface); }
+.ws-inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ws-inbox-item.needs-attention { border-color: var(--comment-strong); background: color-mix(in srgb, var(--comment) 28%, var(--surface)); }
+.ws-inbox-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.ws-inbox-item-where { display: flex; align-items: baseline; gap: 6px; min-width: 0; font: 13.5px var(--ui); }
+.ws-inbox-book { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.ws-inbox-sep { color: var(--ink-3); }
+.ws-inbox-path { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-inbox-badges { display: flex; align-items: center; gap: 10px; flex: none; }
+.ws-inbox-status { font: 600 11px/1.3 var(--ui); padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.ws-inbox-status.replied { background: var(--accent-softer); border-color: var(--accent-soft); color: var(--accent-ink); }
+.ws-inbox-status.new { background: var(--comment); border-color: var(--comment-strong); color: var(--ink); }
+.ws-inbox-time { font: 12px var(--ui); color: var(--ink-3); white-space: nowrap; }
+.ws-inbox-quote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--comment-strong); background: var(--comment); border-radius: 0 6px 6px 0; font: italic 14px/1.45 var(--prose); color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ws-inbox-messages { display: flex; flex-direction: column; gap: 6px; }
+.ws-inbox-msg { display: flex; align-items: flex-start; gap: 8px; font: 13.5px/1.45 var(--ui); color: var(--ink-2); }
+.ws-inbox-msg p { margin: 1px 0 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ws-inbox-msg strong { color: var(--ink); font-weight: 600; margin-right: 4px; }
+.ws-inbox-msg.is-reply { padding-left: 14px; }
+.ws-inbox-avatar { width: 22px; height: 22px; font-size: 9.5px; flex: none; }
+.ws-inbox-item-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.ws-inbox-open { color: var(--accent-ink); border-color: transparent; background: transparent; gap: 4px; }
+.ws-inbox-item:hover .ws-inbox-open { background: var(--accent-softer); }
 .ws-inbox-more {
   align-self: flex-start;
   margin-top: 2px;
 }
+
+/* ---------- Plan › one chapter: its plan and scene cards ---------- */
+.chapter-plan-page { max-width: 900px; }
+.chapter-plan-page .entity-crumbs { margin-bottom: 18px; }
+.chapter-plan-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px 24px; flex-wrap: wrap; margin-bottom: 26px; }
+.chapter-plan-head h1 { margin: 6px 0 0; font: 600 34px/1.15 var(--display); }
+.chapter-plan-head .doc-eyebrow .chapter-state { letter-spacing: .04em; }
+.chapter-plan-section { margin-bottom: 30px; }
+.chapter-plan-label { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font: 600 12px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.chapter-plan-label span { font: 600 11px var(--ui); letter-spacing: 0; color: var(--ink-3); background: var(--surface-3); border-radius: 999px; padding: 1px 7px; }
+.chapter-plan-body { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 22px 10px; }
+.chapter-plan-body .doc-prose { font: 16px/1.6 var(--prose); min-height: 60px; outline: none; }
+.chapter-plan-body .doc-prose > :first-child { margin-top: 0; }
+.chapter-plan-body .markdown-source { min-height: 200px; }
+.chapter-plan-save { min-height: 18px; text-align: right; font: 12px var(--ui); }
+.chapter-plan-empty { border: 1.5px dashed var(--line-2); border-radius: 14px; padding: 20px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+.chapter-plan-empty p { margin: 0; color: var(--ink-3); font: 14px/1.5 var(--ui); max-width: 520px; }
+.chapter-plan-page .scene-list { max-width: none; }
+@media (max-width: 760px) {
+  .chapter-plan-head h1 { font-size: 27px; }
+  .chapter-plan-body { padding: 12px 14px 8px; }
+}
+
+/* ---------- toolbar fits its column: nothing squashed or cut off ---------- */
+.studio-main { container: main / inline-size; }
+.toolbar { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.toolbar::-webkit-scrollbar { display: none; }
+.toolbar > :not(.tb-spacer) { flex: none; }
+.tb-font-select { max-width: 92px; }
+@container main (max-width: 1020px) {
+  .toolbar .save-state:not(.error):not(.readonly) { font-size: 0; gap: 0; margin-right: 2px; }
+  .toolbar .save-state .spinner, .toolbar .save-state svg { font-size: 12px; }
+  .toolbar .tb-size-val { display: none; }
+  .toolbar .tb-sep { margin: 0 3px; }
+}
+@container main (max-width: 900px) {
+  .toolbar .tb-font-select { display: none; }
+  .toolbar .tb-select { max-width: 104px; }
+}
+@container main (max-width: 640px) {
+  .toolbar .tb-size { display: none; }
+}
+
+/* Numbers in the display face use lining figures (old-style 1 and 0 read as I and o). */
+.ws-stat strong, .ws-hero h1, .board-head h1, .chapter-plan-head h1, .doc-title, .title-page h1 { font-variant-numeric: lining-nums tabular-nums; }
+
+/* Form controls in a field line up: selects match text inputs. */
+.field select, .settings .field select, .dialog .field select { height: 38px; border: 1px solid var(--line-2); border-radius: 8px; padding: 0 10px; font: 14.5px var(--ui); color: var(--ink); background: var(--surface); box-sizing: border-box; }
+.field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+
+/* ---------- polish pass ---------- */
+/* Home: room under the greeting; card footers line up at the bottom; the activity strip takes less width. */
+.ws-hero { margin-bottom: 30px; }
+.ws-book-foot { margin-top: auto; }
+.ws-spark { gap: 1.5px; height: 26px; }
+.ws-bar { width: 3px; }
+
+/* Title page: the numbers and the caption stay readable over the mood picture. */
+.title-page-stats { margin: 36px auto 28px; }
+.title-page.has-bg .title-page-stats { width: fit-content; max-width: 100%; box-sizing: border-box; padding: 14px 28px; border-radius: 14px; background: color-mix(in srgb, var(--surface) 72%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); text-shadow: none; }
+.title-page.has-bg .title-page-stats span, .title-page.has-bg .title-page-mood-caption { color: var(--ink-2); }
+.title-page-cta { max-width: 100%; }
+.title-page-cta-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .title-page.has-bg { margin: -16px -20px 0; padding: 40px 18px 24px; }
+  .title-page-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; }
+  .title-page.has-bg .title-page-stats { padding: 14px 22px; }
+}
+
+/* Toolbar: "Comment" becomes its icon whenever the column is narrow. */
+@container main (max-width: 1100px) {
+  .toolbar .tb-text-btn { font-size: 0; gap: 0; }
+  .toolbar .tb-text-btn .icon { font-size: 13px; }
+}
+
+/* "Reference draft" is the quiet default state: an outline, not a filled tag. */
+.chapter-state.draft { background: transparent; box-shadow: inset 0 0 0 1px var(--line-2); }
+
+/* Chapter plan page: the button sits level with the title; the save note sits with the section label. */
+.chapter-plan-head { align-items: center; }
+.chapter-plan-body { position: relative; padding-bottom: 14px; }
+.chapter-plan-save { position: absolute; right: 2px; top: -27px; min-height: 0; }
+
+/* Settings and forms: two columns that never push past the card; one on phones. */
+.settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 760px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
+.field input:not([type="checkbox"]):not([type="radio"]), .field select { min-width: 0; max-width: 100%; }
+
+/* Selects draw the same chevron as the rest of the app instead of the system arrow. */
+.field select, .settings .field select, .dialog .field select, .settings select, .style-field select, .brief-target select, .lib-people select, .lib-add select, .listen-options select, .assist-context select {
+  -webkit-appearance: none; appearance: none; padding-left: 12px; padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b867f' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 12px;
+}
+
+/* Brief: the themes box is as tall as the fields around it. */
+.chip-row.themes { padding: 4px 6px; }
+
+/* Library cards: the role tag matches the small tags on book cards. */
+.ws-library-head .ws-role { flex: none; margin-top: 4px; font: 500 12px/20px var(--ui); padding: 0 8px; }
+
+/* Dark mode: a disabled main button reads as disabled, not as a dimmer colour. */
+:root[data-theme="dark"] .btn-primary:disabled { opacity: 1 !important; background: var(--surface-3) !important; border-color: var(--line-2) !important; color: var(--ink-2) !important; }
+
+/* Pandoc markup stays in the text but reads quietly: line-block bars vanish, citations are small notes. */
+.md-line-mark { font-size: 0; }
+.md-cite { margin-left: .2em; font: 500 .72em var(--ui); color: var(--ink-3); letter-spacing: .01em; font-style: normal; white-space: nowrap; }
+.doc-prose blockquote p:has(.md-line-mark) { margin-bottom: 0 !important; }
+
+/* Dark title page: a fainter picture, so the synopsis reads crisply. */
+:root[data-theme="dark"] .title-page-bg { opacity: .26; }
+:root[data-theme="dark"] .title-page.has-bg .title-page-synopsis { color: var(--ink); }

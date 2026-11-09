@@ -41,12 +41,21 @@ function validateStructure(path: string, content: string) {
   parseBookkit(Object.fromEntries(files.filter(f => !f.asset && f.loaded).map(f => [f.path, f.path === path ? content : f.content])));
 }
 
+/** The document as the book already has it in memory, when it is complete. */
+function knownRow(path: string | null, projectId: string | null): BookDocumentRow | undefined {
+  if (!path || !projectId) return undefined;
+  const store = useBookStore.getState();
+  if (store.projectId !== projectId) return undefined;
+  return store.files.find(f => f.path === path && f.loaded && !f.asset);
+}
+
 export function useDocSession(path: string | null, { projectId, userId, editable, suggesting }: Options): DocSession {
-  const [row, setRow] = useState<BookDocumentRow | null>(null);
-  const [text, setTextState] = useState("");
-  const [saved, setSaved] = useState("");
+  const initial = suggesting ? undefined : knownRow(path, projectId);
+  const [row, setRow] = useState<BookDocumentRow | null>(initial ?? null);
+  const [text, setTextState] = useState(initial?.content ?? "");
+  const [saved, setSaved] = useState(initial?.content ?? "");
   const [reloadKey, setReloadKey] = useState(0);
-  const [state, setState] = useState<SaveState>("loading");
+  const [state, setState] = useState<SaveState>(initial ? "idle" : "loading");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState<BookDocumentRow | null>(null);
@@ -63,8 +72,26 @@ export function useDocSession(path: string | null, { projectId, userId, editable
   // Load the document whenever the path changes.
   useEffect(() => {
     let active = true;
-    setRow(null); setTextState(""); setSaved(""); setError(""); setNotice(""); setConflict(null); setSuggestion(undefined);
-    if (!path || !projectId) { setState("idle"); return; }
+    setError(""); setNotice(""); setConflict(null); setSuggestion(undefined);
+    if (!path || !projectId) { setRow(null); setTextState(""); setSaved(""); setState("idle"); return; }
+    const known = suggesting ? undefined : knownRow(path, projectId);
+    if (known) {
+      // Open from memory at once; realtime and a quiet re-check keep it current.
+      setRow(known); setSaved(known.content);
+      if (live.current.text !== known.content) replace(known.content);
+      setState("idle");
+      (async () => {
+        const cached = editable ? await readLocalDraft(draftKey(userId, projectId, path)).catch(() => undefined) : undefined;
+        if (!active) return;
+        if (cached && cached.content !== known.content) {
+          setRow(cached.base); setSuggestion(cached.suggestion); replace(cached.content); setState("dirty");
+          setNotice("Recovered unsaved changes from this browser.");
+        }
+        void useBookStore.getState().refreshPath(path);
+      })();
+      return () => { active = false; };
+    }
+    setRow(null); setTextState(""); setSaved("");
     setState("loading");
     (async () => {
       const [loaded, review] = await Promise.all([

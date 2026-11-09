@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MARK_CLASS, pandocMarks } from "../../lib/pandoc-marks";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { createRoot } from "react-dom/client";
 import { bookExtensions, bookLinksKey, sceneSlotsKey, type LinkConfig } from "../../lib/editor-extensions";
@@ -132,34 +133,49 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
   return <EditorContent editor={editor} className={className} />;
 }
 
-/** Wrap bible names in static HTML so linked names read the same whether or not a chapter is being edited. */
+/**
+ * Static HTML that reads like the editor: bible names linked, and Pandoc line-block
+ * bars and citations shown quietly (the same as the editor's decorations).
+ */
 function linkEntities(html: string, matcher?: { regex: RegExp | null; byAlias: Map<string, { id: string; kind: string }> }) {
-  if (!matcher?.regex || typeof DOMParser === "undefined") return html;
+  if (typeof DOMParser === "undefined" || (!matcher?.regex && !/\| |@/.test(html))) return html;
   const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
   const root = doc.body.firstElementChild!;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
   while (walker.nextNode()) {
     const n = walker.currentNode as Text;
-    if (!n.parentElement?.closest("h1,h2,h3,h4,pre,code,a")) nodes.push(n);
+    if (!n.parentElement?.closest("pre,code,a")) nodes.push(n);
   }
   for (const node of nodes) {
     const text = node.data;
-    matcher.regex.lastIndex = 0;
-    const matches = [...text.matchAll(matcher.regex)];
-    if (!matches.length) continue;
+    const inHeading = !!node.parentElement?.closest("h1,h2,h3,h4");
+    // A line starts at the beginning of a paragraph or after a line break.
+    const prev = node.previousSibling;
+    const lineStart = node.parentElement?.tagName === "P" && (!prev || (prev as Element).tagName === "BR");
+    const spans: Array<{ from: number; to: number; className: string; entity?: string }> = pandocMarks(text)
+      .filter(m => m.kind === "cite" || (lineStart && m.from === 0))
+      .map(m => ({ from: m.from, to: m.to, className: MARK_CLASS[m.kind] }));
+    if (matcher?.regex && !inHeading) {
+      matcher.regex.lastIndex = 0;
+      for (const m of text.matchAll(matcher.regex)) {
+        const e = matcher.byAlias.get(m[0]);
+        if (e) spans.push({ from: m.index!, to: m.index! + m[0].length, className: `entity-ref entity-${e.kind}`, entity: e.id });
+      }
+    }
+    if (!spans.length) continue;
+    spans.sort((a, b) => a.from - b.from);
     const frag = doc.createDocumentFragment();
     let at = 0;
-    for (const m of matches) {
-      const e = matcher.byAlias.get(m[0]);
-      if (!e) continue;
-      frag.append(text.slice(at, m.index));
+    for (const s of spans) {
+      if (s.from < at) continue; // overlaps the previous span
+      frag.append(text.slice(at, s.from));
       const span = doc.createElement("span");
-      span.className = `entity-ref entity-${e.kind}`;
-      span.dataset.entity = e.id;
-      span.textContent = m[0];
+      span.className = s.className;
+      if (s.entity) span.dataset.entity = s.entity;
+      span.textContent = text.slice(s.from, s.to);
       frag.append(span);
-      at = m.index! + m[0].length;
+      at = s.to;
     }
     frag.append(text.slice(at));
     node.replaceWith(frag);

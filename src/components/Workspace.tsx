@@ -13,6 +13,7 @@ import { bookSlug, navFlags, openInNewTab } from "../lib/book-url";
 import { NewBookDialog, UserMenu, useTheme } from "./studio/Studio";
 import { formatWords, Icon, initials } from "./studio/common";
 import { navigatePublic } from "../lib/public-routes";
+import { readLocal, writeLocal } from "../lib/local-cache";
 
 const DAY = 86400000;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -26,7 +27,7 @@ function ago(when: string | null): string {
   const d = Math.round(s / 86400);
   if (d === 1) return "Yesterday";
   if (d < 7) return `${d} days ago`;
-  return new Date(when).toLocaleDateString(undefined, { day: "numeric", month: "short", year: new Date(when).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+  return new Date(when).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: new Date(when).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
 }
 
 /** Sequential steps of the accent hue for activity; 0 is the empty cell. */
@@ -40,7 +41,7 @@ const scoreOf = (d: Omit<DayTotal, "score" | "books" | "day">) => d.added + d.re
 /** "+312 words · 2 chapters · 3 comments" */
 function describeDay(d: DayTotal): string {
   const parts = [
-    d.added || d.removed ? `${d.added ? `+${d.added.toLocaleString()}` : ""}${d.added && d.removed ? " / " : ""}${d.removed ? `−${d.removed.toLocaleString()}` : ""} words` : "",
+    d.added || d.removed ? `${d.added ? `+${d.added.toLocaleString("en-US")}` : ""}${d.added && d.removed ? " / " : ""}${d.removed ? `−${d.removed.toLocaleString("en-US")}` : ""} words` : "",
     d.chapters ? `${d.chapters} chapter${d.chapters === 1 ? "" : "s"} revised` : "",
     d.pages ? `${d.pages} page${d.pages === 1 ? "" : "s"} edited` : "",
     d.comments ? `${d.comments} comment${d.comments === 1 ? "" : "s"}` : "",
@@ -78,7 +79,7 @@ function ActivityCalendar({ days }: { days: DayTotal[] }) {
   const months = weeks.map((w, i) => {
     const d = w.find(Boolean);
     if (!d) return "";
-    const m = new Date(d.day + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", timeZone: "UTC" });
+    const m = new Date(d.day + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
     const prev = i > 0 ? weeks[i - 1].find(Boolean) : null;
     return !prev || new Date(prev.day + "T00:00:00Z").getUTCMonth() !== new Date(d.day + "T00:00:00Z").getUTCMonth() ? m : "";
   });
@@ -99,7 +100,7 @@ function ActivityCalendar({ days }: { days: DayTotal[] }) {
       <div className="ws-cal-key" aria-hidden><span>Less</span>{[0, 1, 2, 3, 4].map(l => <span key={l} className={`ws-cell l${l}`} />)}<span>More</span></div>
       {hover && (
         <div className="ws-tip" style={{ left: hover.x, top: hover.y }}>
-          <strong>{new Date(hover.d.day + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}</strong>
+          <strong>{new Date(hover.d.day + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}</strong>
           <span>{describeDay(hover.d)}</span>
           {hover.d.books.length > 0 && <span className="muted">{[...new Set(hover.d.books)].join(", ")}</span>}
         </div>
@@ -116,7 +117,7 @@ function Spark({ book }: { book: WorkspaceBook }) {
     <div className="ws-spark" aria-label={`Activity in the last 30 days: ${days.filter(d => d.score).length} active days`}>
       {days.map(d => (
         <span key={d.day} className={`ws-bar ${d.score ? "on" : ""}`} style={{ height: d.score ? `${Math.max(14, (d.score / max) * 100)}%` : undefined }}
-          title={`${new Date(d.day + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}: ${describeDay(d)}`} />
+          title={`${new Date(d.day + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}: ${describeDay(d)}`} />
       ))}
     </div>
   );
@@ -192,6 +193,8 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   const weekWords = week.reduce((n, a) => n + a.added, 0);
   const weekTalk = week.reduce((n, a) => n + a.comments + a.suggestions, 0);
   const recentNote = weekWords ? `+${formatWords(weekWords)} words this week` : weekTalk ? `${weekTalk} comment${weekTalk === 1 ? "" : "s"} this week` : week.length ? "Edited this week" : "";
+  const owner = book.role === "owner";
+  const sharedBy = !owner ? (book.owner_name ? `${book.owner_name}’s book` : "Shared with you") : "";
   return (
     <button className={`ws-book ${featured ? "featured" : ""}`} onClick={onOpen}>
       <div className="ws-book-top">
@@ -199,13 +202,12 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
         <div className="ws-book-body">
           <div className="ws-book-head-row">
             <div className="ws-book-head">
-              <div className="ws-book-title-row">
-                <span className="ws-book-title">{book.name}</span>
-                <span className="ws-book-form">{formLabel}</span>
-              </div>
+              <span className="ws-book-title">{book.name}</span>
               <div className="ws-book-meta">
-                {library ? <span>{library.name}</span> : book.role !== "owner" ? <>{book.owner_name ? `${book.owner_name}’s book` : "Shared"}</> : "Your book"}
-                {book.role !== "owner" && <span className="ws-role">{book.role === "viewer" ? "reader" : book.role}</span>}
+                <span className="ws-book-form">{formLabel}</span>
+                {library && <span>{library.name}</span>}
+                {sharedBy && <span>{sharedBy}</span>}
+                {!owner && <span className="ws-role">{book.role === "viewer" ? "reader" : book.role}</span>}
                 {book.private && <span className="ws-role">private</span>}
                 {!book.is_bookkit && <span className="ws-role">classic</span>}
               </div>
@@ -214,29 +216,29 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
           </div>
           <div className="ws-progress">
             <div className="ws-progress-row">
-              <span><strong>{formatWords(book.author_words)}</strong> words written{target ? <span className="muted"> of {formatWords(target)}</span> : null}</span>
+              <span><strong>{formatWords(book.author_words)}</strong> words{target ? <span className="muted"> of {formatWords(target)}</span> : null}</span>
               {target > 0 && <span className="muted">{pct}%</span>}
             </div>
             <div className="ws-progress-bar"><span style={{ width: `${pct}%` }} /></div>
-            <div className="ws-progress-row small muted">
-              <span>{chapters ? `${book.chapters_written} of ${chapters} chapters` : "No chapters yet"}</span>
-              {book.draft_words > 0 && <span>{formatWords(book.draft_words)} in the reference draft</span>}
+            <div className="ws-progress-note muted">
+              {chapters ? `${book.chapters_written} of ${chapters} chapters written` : "No chapters yet"}
+              {book.draft_words > 0 && <> · {formatWords(book.draft_words)} draft</>}
             </div>
-            <div className={`ws-book-threads-row ${unresolved > 0 ? "has-open" : "muted"}`}>
-              <span className="ws-book-threads-pill">
-                <Icon name="comment" size={12} />
-                <span>
-                  {unresolved} unresolved thread{unresolved === 1 ? "" : "s"} · {openComments} open comment{openComments === 1 ? "" : "s"}
+            {(unresolved > 0 || openComments > 0) && (
+              <div className="ws-book-threads-row">
+                <span className="ws-book-threads-pill has-open">
+                  <Icon name="comment" size={12} />
+                  <span>{unresolved} open thread{unresolved === 1 ? "" : "s"}{openComments ? ` · ${openComments} comment${openComments === 1 ? "" : "s"}` : ""}</span>
                 </span>
-              </span>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
       <div className="ws-book-foot">
         <div className="ws-last">
           <span className="ws-last-label">Last worked on</span>
-          <span>{ago(book.last_worked_at)}{book.last_worked_by && book.role !== "owner" ? ` · ${book.last_worked_by}` : ""}</span>
+          <span>{ago(book.last_worked_at)}{book.last_worked_by && !owner ? ` · ${book.last_worked_by}` : ""}</span>
           {recentNote && <span className="muted">{recentNote}</span>}
         </div>
         <Spark book={book} />
@@ -245,16 +247,26 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   );
 }
 
+/** The workspace as last seen in this tab or browser: shown at once, then refreshed. */
+let workspaceMemory: { userId: string; books: WorkspaceBook[] } | null = null;
+const workspaceKey = (userId: string) => `workspace:${userId}`;
+
 function useBooks() {
   const catalogLength = useProjectStore(s => s.projectCatalog.length);
-  const [books, setBooks] = useState<WorkspaceBook[] | null>(null);
+  const userId = useAuthStore(s => s.userId) ?? "";
+  const [books, setBooks] = useState<WorkspaceBook[] | null>(() =>
+    workspaceMemory?.userId === userId ? workspaceMemory.books : readLocal<WorkspaceBook[]>(workspaceKey(userId)) ?? null);
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
   useEffect(() => {
     let live = true;
-    loadWorkspace().then(b => { if (live) setBooks(b); }).catch(e => { if (live) setError((e as Error).message); });
+    loadWorkspace().then(b => {
+      workspaceMemory = { userId, books: b };
+      writeLocal(workspaceKey(userId), b);
+      if (live) { setBooks(b); setError(""); }
+    }).catch(e => { if (live) setError((e as Error).message); });
     return () => { live = false; };
-  }, [catalogLength, version]);
+  }, [catalogLength, version, userId]);
   return { books, error, reload: () => setVersion(v => v + 1) };
 }
 
@@ -279,8 +291,8 @@ function Overview({ books }: { books: WorkspaceBook[] }) {
       <div className="ws-stats">
         <div className="ws-stat"><span className="ws-stat-label">Words written</span><strong>{formatWords(words)}</strong><span className="muted">across {books.length} book{books.length === 1 ? "" : "s"}</span></div>
         <div className="ws-stat"><span className="ws-stat-label">This week</span><strong>{weekWords > 0 ? "+" : ""}{formatWords(weekWords)}</strong><span className="muted">words written{weekTalk ? ` · ${weekTalk} comment${weekTalk === 1 ? "" : "s"}` : ""}</span></div>
-        <div className="ws-stat"><span className="ws-stat-label">Open conversations</span><strong>{totalUnresolved}</strong><span className="muted">{totalUnresolved === 1 ? "unresolved thread" : "unresolved threads"} · {totalOpenComments} open comment{totalOpenComments === 1 ? "" : "s"}</span></div>
-        <div className="ws-stat"><span className="ws-stat-label">Reference drafts</span><strong>{formatWords(draftWords)}</strong><span className="muted">{activeDays}/30 active days{streak > 1 ? ` · ${streak}d streak` : ""}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Open conversations</span><strong>{totalUnresolved}</strong><span className="muted">thread{totalUnresolved === 1 ? "" : "s"} · {totalOpenComments} comment{totalOpenComments === 1 ? "" : "s"}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Last 30 days</span><strong>{activeDays}</strong><span className="muted">active day{activeDays === 1 ? "" : "s"}{streak > 1 ? ` · ${streak}-day streak` : ""}{draftWords ? ` · ${formatWords(draftWords)} in drafts` : ""}</span></div>
       </div>
       <div className="ws-activity">
         <div className="ws-section-head"><h2>Activity</h2><span className="muted">Words written, revisions and comments, last 12 weeks</span></div>
@@ -356,56 +368,29 @@ function WorkspaceInbox({
     }
   };
 
+  const tabs: Array<[typeof filter, string, number]> = [["all", "All open", allThreads.length], ["attention", "Needs attention", attentionThreads.length], ["replies", "With replies", repliedThreads.length]];
   return (
     <section className="ws-inbox" aria-label="Comments and responses inbox">
       <div className="ws-inbox-head">
-        <div className="ws-inbox-title-wrap">
+        <div className="ws-section-head">
           <h2>Inbox</h2>
-          <span className={`ws-inbox-count-pill ${allThreads.length > 0 ? "has-open" : ""}`}>
-            {allThreads.length} unresolved thread{allThreads.length === 1 ? "" : "s"} · {totalOpenComments} open comment{totalOpenComments === 1 ? "" : "s"}
-          </span>
+          <span className="muted">{allThreads.length} open thread{allThreads.length === 1 ? "" : "s"} · {totalOpenComments} comment{totalOpenComments === 1 ? "" : "s"}</span>
         </div>
         {allThreads.length > 0 && (
-          <div className="ws-inbox-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={filter === "all"}
-              className={`chip ${filter === "all" ? "on" : ""}`}
-              onClick={() => setFilter("all")}
-            >
-              All open ({allThreads.length})
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={filter === "attention"}
-              className={`chip ${filter === "attention" ? "on" : ""}`}
-              onClick={() => setFilter("attention")}
-            >
-              Needs attention ({attentionThreads.length})
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={filter === "replies"}
-              className={`chip ${filter === "replies" ? "on" : ""}`}
-              onClick={() => setFilter("replies")}
-            >
-              With replies ({repliedThreads.length})
-            </button>
+          <div className="ws-inbox-tabs" role="tablist" aria-label="Filter the inbox">
+            {tabs.map(([id, label, n]) => (
+              <button key={id} type="button" role="tab" aria-selected={filter === id} className={`ws-inbox-tab ${filter === id ? "on" : ""}`} onClick={() => setFilter(id)}>
+                {label} <span className="muted">{n}</span>
+              </button>
+            ))}
           </div>
         )}
       </div>
 
       {displayed.length === 0 ? (
-        <div className="ws-inbox-empty">
-          <Icon name="comment" size={16} />
-          <span>
-            {allThreads.length === 0
-              ? "All caught up — no unresolved comment threads across your books."
-              : "No open threads match this filter."}
-          </span>
+        <div className="ws-inbox-empty muted">
+          <Icon name="comment" size={14} />
+          <span>{allThreads.length === 0 ? "All caught up. No open comment threads in your books." : "No open threads match this filter."}</span>
         </div>
       ) : (
         <div className="ws-inbox-list">
@@ -418,76 +403,42 @@ function WorkspaceInbox({
                 key={t.id}
                 role="button"
                 tabIndex={0}
-                className={`ws-inbox-item ${fromOther ? "needs-look" : ""}`}
+                className={`ws-inbox-item ${fromOther ? "needs-attention" : ""}`}
                 onClick={() => onOpenThread(book, t, false)}
-                onAuxClick={(e) => {
-                  if (e.button === 1) {
-                    e.preventDefault();
-                    onOpenThread(book, t, true);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onOpenThread(book, t, false);
-                  }
-                }}
+                onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onOpenThread(book, t, true); } }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenThread(book, t, false); } }}
               >
                 <div className="ws-inbox-item-top">
-                  <div className="ws-inbox-loc">
-                    <strong className="ws-inbox-book">{t.book_name}</strong>
-                    <span className="ws-inbox-sep">·</span>
-                    <span className="ws-inbox-page">{formatThreadPage(t.path)}</span>
+                  <div className="ws-inbox-item-where">
+                    <span className="ws-inbox-book">{t.book_name}</span>
+                    <span className="ws-inbox-sep">›</span>
+                    <span className="ws-inbox-path">{formatThreadPage(t.path)}</span>
                   </div>
                   <div className="ws-inbox-badges">
-                    {fromOther && t.has_reply ? (
-                      <span className="ws-inbox-status attention">
-                        New reply from {t.latest_author_name}
-                      </span>
-                    ) : fromOther ? (
-                      <span className="ws-inbox-status attention">
-                        Comment from {t.author_name}
-                      </span>
-                    ) : t.has_reply ? (
-                      <span className="ws-inbox-status replied">
-                        {t.message_count} comments · replied
-                      </span>
-                    ) : (
-                      <span className="ws-inbox-status">1 open comment</span>
-                    )}
+                    {fromOther && t.has_reply ? <span className="ws-inbox-status new">New reply from {t.latest_author_name}</span>
+                      : fromOther ? <span className="ws-inbox-status new">Comment from {t.author_name}</span>
+                      : t.has_reply ? <span className="ws-inbox-status replied">{t.message_count} comments · replied</span>
+                      : <span className="ws-inbox-status">Waiting for a reply</span>}
                     <time className="ws-inbox-time">{ago(t.updated_at)}</time>
                   </div>
                 </div>
-
-                {t.quoted_text && (
-                  <blockquote className="ws-inbox-quote">“{t.quoted_text}”</blockquote>
-                )}
-
+                {t.quoted_text && <blockquote className="ws-inbox-quote">“{t.quoted_text}”</blockquote>}
                 <div className="ws-inbox-messages">
                   <div className="ws-inbox-msg">
-                    <span className="avatar">{initials(t.author_name)}</span>
-                    <span className="ws-inbox-msg-author">{t.author_name}</span>
-                    <span className="ws-inbox-msg-body">{t.first_body}</span>
+                    <span className="avatar ws-inbox-avatar">{initials(t.author_name)}</span>
+                    <p><strong>{t.author_name}</strong> {t.first_body}</p>
                   </div>
                   {t.has_reply && (
                     <div className="ws-inbox-msg is-reply">
-                      <span className="avatar">{initials(t.latest_author_name)}</span>
-                      <span className="ws-inbox-msg-author">{t.latest_author_name} replied</span>
-                      <span className="ws-inbox-msg-body">{t.latest_body}</span>
+                      <span className="avatar ws-inbox-avatar">{initials(t.latest_author_name)}</span>
+                      <p><strong>{t.latest_author_name}</strong> {t.latest_body}</p>
                     </div>
                   )}
                 </div>
-
-                <div className="ws-inbox-actions">
-                  <span className="ws-inbox-open-link">Open in book →</span>
-                  <button
-                    type="button"
-                    data-no-tab
-                    className="btn btn-sm"
-                    disabled={resolvingId === t.id}
-                    onClick={(e) => void handleResolve(e, t.id)}
-                  >
-                    {resolvingId === t.id ? "Resolving…" : "Resolve"}
+                <div className="ws-inbox-item-actions">
+                  <span className="btn btn-sm btn-ghost ws-inbox-open">Open in book <Icon name="chevron" size={12} /></span>
+                  <button type="button" data-no-tab className="btn btn-sm" disabled={resolvingId === t.id} onClick={(e) => void handleResolve(e, t.id)}>
+                    <Icon name="check" size={12} /> {resolvingId === t.id ? "Resolving…" : "Resolve"}
                   </button>
                 </div>
               </div>
@@ -764,7 +715,7 @@ function LibraryHome({ library }: { library: Library }) {
           <p className="ws-sub">{latest ? <>Hello {firstName(all, email)}. Last worked on: <button className="link-btn inline" onClick={() => open(latest)}>{latest.name}</button>, {ago(latest.last_worked_at).toLowerCase()}.</> : all.length ? "" : "No books here yet."}</p>
           {library.pending_owner && <div className="ws-pending">This library is waiting for <strong>{library.pending_owner}</strong>. It becomes theirs the first time they sign in. <button data-no-tab className="link-btn inline" onClick={() => setSettings(true)}>Invite them</button></div>}
         </section>
-        {error && <div className="inline-error" role="alert">Couldn’t load the books: {error}</div>}
+        {error && !books && <div className="inline-error" role="alert">Couldn’t load the books: {error}</div>}
         {!books && !error && <div className="studio-message"><span className="spinner" /> Loading the shelves…</div>}
         {books && all.length > 0 && <Overview books={all} />}
         {books && all.length > 0 && <WorkspaceInbox books={all} onOpenThread={openThread} onReload={reload} />}
@@ -916,7 +867,7 @@ function AllLibraries() {
       </TopBar>
       <main className="ws-main">
         <section className="ws-hero">
-          <div className="ws-date">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</div>
+          <div className="ws-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
           <h1>{hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"}{all.length ? `, ${firstName(all, email)}` : ""}</h1>
           <p className="ws-sub">{libraries.length ? `${libraries.length} ${libraries.length === 1 ? "library" : "libraries"}, ${all.length} book${all.length === 1 ? "" : "s"}.` : "Start with a library: your own address on bookkit.net, with shelves for your books."}</p>
         </section>
@@ -967,7 +918,8 @@ export function Workspace() {
   const selectedSlug = useLibraryStore(s => s.selectedSlug);
   const selectLibrary = useLibraryStore(s => s.selectLibrary);
   const current = useLibraryStore(s => s.current());
-  useEffect(() => { if (!libraries) void load(); }, [libraries, load]);
+  const fresh = useLibraryStore(s => s.fresh);
+  useEffect(() => { if (!fresh) void load(); }, [fresh, load]);
   if (!libraries) return <div className="studio-message"><span className="spinner" /> Opening your library…</div>;
   const slug = hostLibrary() ?? selectedSlug;
   if (!slug) return <AllLibraries />;

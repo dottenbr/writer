@@ -848,7 +848,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                       {formatSectionPrefix(entry.chapter.sectionType, chapterNumberMap.get(entry.chapter.id) ?? null)}
                     </span>
                     <span>{entry.chapter.title || "Untitled"}</span>
-                    <span className="sidebar-item-badge">{entry.chapter.wordCount > 0 ? entry.chapter.wordCount.toLocaleString() : ""}</span>
+                    <span className="sidebar-item-badge">{entry.chapter.wordCount > 0 ? entry.chapter.wordCount.toLocaleString("en-US") : ""}</span>
                   </div>
                 )
               )
@@ -932,7 +932,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                           <div className="font-mono" style={{ marginBottom: 8 }}>
                             Remote version {activeConflictDetails.remoteVersion ?? "?"}
                             {activeConflictDetails.remoteUpdatedAt
-                              ? ` · ${new Date(activeConflictDetails.remoteUpdatedAt).toLocaleString()}`
+                              ? ` · ${new Date(activeConflictDetails.remoteUpdatedAt).toLocaleString("en-US")}`
                               : ""}
                           </div>
                           <div className="diff-content">
@@ -1018,7 +1018,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
               {activeChapter.title ? `: ${activeChapter.title}` : ""}
             </span>
             <span>
-              {currentWords.toLocaleString()} words (~{estimatePages(currentWords)} pages) · {currentChars.toLocaleString()} characters
+              {currentWords.toLocaleString("en-US")} words (~{estimatePages(currentWords)} pages) · {currentChars.toLocaleString("en-US")} characters
             </span>
           </div>
         </div>
@@ -1045,14 +1045,14 @@ Write a thorough editorial review of this chapter. Structure your response with 
           <div className="right-panel-section">
             <div className="right-panel-title">Manuscript</div>
             <div className="stat" style={{ marginBottom: 8 }}>
-              <div className="stat-value">{totalWords.toLocaleString()}</div>
+              <div className="stat-value">{totalWords.toLocaleString("en-US")}</div>
               <div className="stat-label">Total Words (~{estimatePages(totalWords)} pages)</div>
             </div>
             <div className="font-mono">{project.chapters.length} sections</div>
             {project.brief.targetWordCount > 0 && (
               <>
                 <div className="font-mono" style={{ marginTop: 8 }}>
-                  Target {project.brief.targetWordCount.toLocaleString()} (~{estimatePages(project.brief.targetWordCount)} pages)
+                  Target {project.brief.targetWordCount.toLocaleString("en-US")} (~{estimatePages(project.brief.targetWordCount)} pages)
                 </div>
                 <div className="progress-bar mt-md">
                   <div className="progress-fill" style={{ width: `${Math.min(100, (totalWords / project.brief.targetWordCount) * 100)}%` }} />
@@ -1119,7 +1119,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                       <div className="comment-quoted">{comment.quotedText}</div>
                       <div className="comment-text">{comment.text}</div>
                       <div className="comment-meta">
-                        {new Date(comment.createdAt).toLocaleDateString(undefined, {
+                        {new Date(comment.createdAt).toLocaleDateString("en-GB", {
                           month: "short",
                           day: "numeric",
                           hour: "2-digit",
@@ -1132,7 +1132,7 @@ Write a thorough editorial review of this chapter. Structure your response with 
                             <div key={reply.id} className="comment-reply">
                               <div className="comment-reply-text">{reply.text}</div>
                               <div className="comment-meta">
-                                {new Date(reply.createdAt).toLocaleDateString(undefined, {
+                                {new Date(reply.createdAt).toLocaleDateString("en-GB", {
                                   month: "short",
                                   day: "numeric",
                                   hour: "2-digit",

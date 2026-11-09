@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import { loadLibraries, type Library } from "../lib/supabase-service";
 import { hostLibrary } from "../lib/library-host";
+import { readLocal, writeLocal } from "../lib/local-cache";
+import { useAuthStore } from "./useAuthStore";
 
 interface LibraryState {
   libraries: Library[] | null;
+  /** Whether `libraries` came from the server in this session (not only from this browser's cache). */
+  fresh: boolean;
   selectedSlug: string | null;
   error: string;
   load: () => Promise<void>;
@@ -22,13 +26,27 @@ function initialSelectedSlug(): string | null {
   }
 }
 
+let inflight: Promise<void> | null = null;
+
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   libraries: null,
+  fresh: false,
   selectedSlug: initialSelectedSlug(),
   error: "",
-  load: async () => {
-    try { set({ libraries: await loadLibraries(), error: "" }); }
-    catch (e) { set({ error: (e as Error).message, libraries: get().libraries ?? [] }); }
+  load: () => {
+    if (inflight) return inflight;
+    const key = `libraries:${useAuthStore.getState().userId ?? "anon"}`;
+    // Show the libraries this browser last saw while asking for the current list.
+    if (!get().libraries) { const cached = readLocal<Library[]>(key); if (cached) set({ libraries: cached }); }
+    inflight = (async () => {
+      try {
+        const libraries = await loadLibraries();
+        set({ libraries, fresh: true, error: "" });
+        writeLocal(key, libraries);
+      } catch (e) { set({ error: (e as Error).message, libraries: get().libraries ?? [], fresh: true }); }
+      finally { inflight = null; }
+    })();
+    return inflight;
   },
   selectLibrary: (slug) => {
     set({ selectedSlug: slug });

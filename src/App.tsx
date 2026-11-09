@@ -6,7 +6,7 @@ import { supabase } from "./lib/supabase-client";
 import { noteSignOutReason, signingOut } from "./lib/supabase-service";
 import { navFlags } from "./lib/book-url";
 import { hostLibrary } from "./lib/library-host";
-import { usePublicLocation } from "./lib/public-routes";
+import { leaveSignInAddress, usePublicLocation } from "./lib/public-routes";
 
 const NAV_BUTTON_SELECTOR = [
   ".ws-book",
@@ -52,6 +52,7 @@ export default function App() {
   } = useProjectStore();
   const { isAuthenticated, checkAuth } = useAuthStore();
   const publicPage = usePublicLocation(isAuthenticated, !!hostLibrary());
+  useEffect(() => { if (isAuthenticated) leaveSignInAddress(); }, [isAuthenticated]);
   const didBootstrap = useRef(false);
   const didBootstrapLogin = useRef(false);
   const [checking, setChecking] = useState(true);

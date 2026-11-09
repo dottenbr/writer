@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import { listBookDocuments, readBookDocument, type BookDocumentRow } from "../lib/supabase-service";
+import { listBookDocuments, readBookDocument, refreshBookDocuments, type BookDocumentRow } from "../lib/supabase-service";
+import { readStored, writeStored } from "../lib/local-cache";
+import { useAuthStore } from "./useAuthStore";
 import { subscribeBookActivity, readBookReview, type Suggestion, type Thread } from "../lib/bookkit-collaboration";
 import { buildBookModel, type BookModel } from "../lib/book-model";
 import { supabase } from "../lib/supabase-client";
@@ -47,6 +49,8 @@ interface BookState {
   setVisibleChapter: (n: number | undefined) => void;
   loadReview: (path: string) => Promise<void>;
   load: (projectId: string) => Promise<void>;
+  /** Download what changed since the files in memory were fetched. */
+  revalidate: () => Promise<void>;
   unload: () => void;
   refreshPath: (path: string) => Promise<BookDocumentRow | null>;
   upsert: (row: BookDocumentRow) => void;
@@ -68,6 +72,20 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
 let nonce = 0;
 let lastWritePath = "";
+/** Only manuscript places (title page, chapters, front and back matter) are remembered for the Manuscript button. */
+const isManuscriptPlace = (path: string) => path === "" || !/^(craft|research|bible|outline|publication)\//.test(path) && !/^[^/]+\.(md|ya?ml)$/i.test(path);
+
+/** Books opened in this tab, so switching back is instant. */
+const memoryCache = new Map<string, BookDocumentRow[]>();
+const cacheKey = (projectId: string) => `files:${useAuthStore.getState().userId ?? "anon"}:${projectId}`;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function remember(projectId: string, files: BookDocumentRow[], delay = 1500) {
+  memoryCache.set(projectId, files);
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => { persistTimer = null; void writeStored(cacheKey(projectId), files); }, delay);
+}
+/** Forget books cached in this tab (sign-out). */
+export function forgetBooks() { memoryCache.clear(); }
 
 const PREF_KEY = "bookkit-ui";
 function readPrefs(): Record<string, any> {
@@ -94,7 +112,9 @@ export const useBookStore = create<BookState>((set, get) => {
   const rebuild = (immediate = false) => {
     if (rebuildTimer) clearTimeout(rebuildTimer);
     const run = () => {
-      const model = buildBookModel(get().files);
+      const { projectId, files } = get();
+      if (projectId && files.length) remember(projectId, files);
+      const model = buildBookModel(files);
       set({ model, wordsToday: trackDailyWords(get().projectId, model.chapters.reduce((n, c) => n + c.authorWords, 0)) });
     };
     if (immediate) run(); else rebuildTimer = setTimeout(run, 400);
@@ -132,14 +152,25 @@ export const useBookStore = create<BookState>((set, get) => {
       if (get().projectId === projectId && get().status !== "error") return;
       get().unload();
       const saved = prefs().locations?.[projectId];
-      lastWritePath = saved?.view === "write" ? saved.path ?? "" : "";
+      lastWritePath = saved?.view === "write" && isManuscriptPlace(saved.path ?? "") ? saved.path ?? "" : "";
       set({ projectId, files: [], model: null, status: "loading", error: "", location: { path: saved?.path ?? "", anchor: saved?.anchor, nonce: ++nonce }, view: saved?.view ?? "write", selectedEntity: null });
+      // Show what this browser last saw right away, then bring it up to date.
+      const cached = memoryCache.get(projectId) ?? await readStored<BookDocumentRow[]>(cacheKey(projectId));
+      if (get().projectId !== projectId) return;
       try {
-        const files = await listBookDocuments(projectId);
-        if (get().projectId !== projectId) return;
-        set({ files, status: "ready" });
-        rebuild(true);
-        void get().refreshReviewCounts();
+        if (cached?.length) {
+          set({ files: cached, status: "ready" });
+          rebuild(true);
+          void get().refreshReviewCounts();
+          void get().revalidate();
+        } else {
+          const files = await listBookDocuments(projectId);
+          if (get().projectId !== projectId) return;
+          set({ files, status: "ready" });
+          rebuild(true);
+          remember(projectId, files, 0);
+          void get().refreshReviewCounts();
+        }
       } catch (e) {
         set({ status: "error", error: (e as Error).message });
         return;
@@ -159,7 +190,26 @@ export const useBookStore = create<BookState>((set, get) => {
       pollTimer = setInterval(() => void get().refreshReviewCounts(), 60000);
     },
 
+    revalidate: async () => {
+      const { projectId, files: before } = get();
+      if (!projectId) return;
+      try {
+        const { rows, changed } = await refreshBookDocuments(projectId, before);
+        if (get().projectId !== projectId) return;
+        if (changed) {
+          // Keep anything saved in this tab while the refresh was running.
+          const mine = new Map(get().files.map(f => [f.path, f]));
+          const files = rows.map(r => { const m = mine.get(r.path); return m && m.loaded && !m.asset && m.version > r.version ? m : r; });
+          set({ files });
+          rebuild(true);
+        }
+        remember(projectId, get().files, 0);
+      } catch { /* offline: keep what we have */ }
+    },
+
     unload: () => {
+      const { projectId, files } = get();
+      if (projectId && files.length) memoryCache.set(projectId, files);
       stopActivity?.();
       stopActivity = null;
       if (pollTimer) clearInterval(pollTimer);
@@ -232,7 +282,7 @@ export const useBookStore = create<BookState>((set, get) => {
         }
         return;
       }
-      if (view === "write") lastWritePath = path;
+      if (view === "write" && isManuscriptPlace(path)) lastWritePath = path;
       set({ location: { path, anchor: opts.anchor, find: opts.find, nonce: ++nonce }, view });
       const { projectId } = get();
       if (projectId) writePrefs({ locations: { ...(prefs().locations ?? {}), [projectId]: { path, view, anchor: opts.anchor } } });

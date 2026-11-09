@@ -1852,34 +1852,34 @@ export interface BookDocumentRow {
   content: string;
   version: number;
 }
-export async function listBookDocuments(projectId: string): Promise<BookDocumentRow[]> {
-  const fetchDocPaths = async () => {
-    const list: BookDocumentRow[] = [];
-    for (let offset = 0; ; offset += 500) {
-      const { data, error } = await supabase.from('bookkit_documents').select('path,version').eq('project_id', projectId).order('path').range(offset, offset + 499);
-      if (error) throw error;
-      list.push(...(data ?? []).map(d => ({ ...d, content: '', loaded: false })));
-      if ((data ?? []).length < 500) break;
-    }
-    return list;
-  };
-  const fetchAssets = async () => {
-    const assets: BookDocumentRow[] = [];
-    for (let offset = 0; ; offset += 500) {
-      const { data, error } = await supabase.from('bookkit_assets').select('path,size_bytes,sha256,chunks,unix_mode,is_directory').eq('project_id', projectId).order('path').range(offset, offset + 499);
-      if (error) throw error;
-      for (const { path, ...asset } of data ?? []) assets.push({ path, content: '', version: 0, loaded: true, asset });
-      if ((data ?? []).length < 500) break;
-    }
-    return assets;
-  };
-  const [rows, assetRows] = await Promise.all([fetchDocPaths(), fetchAssets()]);
+async function listBookDocumentVersions(projectId: string): Promise<BookDocumentRow[]> {
+  const list: BookDocumentRow[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabase.from('bookkit_documents').select('path,version').eq('project_id', projectId).order('path').range(offset, offset + 499);
+    if (error) throw error;
+    list.push(...(data ?? []).map(d => ({ ...d, content: '', loaded: false })));
+    if ((data ?? []).length < 500) break;
+  }
+  return list;
+}
+
+async function listBookAssets(projectId: string): Promise<BookDocumentRow[]> {
+  const assets: BookDocumentRow[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabase.from('bookkit_assets').select('path,size_bytes,sha256,chunks,unix_mode,is_directory').eq('project_id', projectId).order('path').range(offset, offset + 499);
+    if (error) throw error;
+    for (const { path, ...asset } of data ?? []) assets.push({ path, content: '', version: 0, loaded: true, asset });
+    if ((data ?? []).length < 500) break;
+  }
+  return assets;
+}
+
+/** Fill in the content of `rows` whose path is in `paths`, 100 documents per request. */
+async function fetchBookContents(projectId: string, rows: BookDocumentRow[], paths: string[]): Promise<void> {
   const indexByPath = new Map(rows.map((r, i) => [r.path, i]));
-  // Research scans can contain megabytes of OCR. Fetch those only on demand.
-  const core = rows.filter(d => !d.path.startsWith('research/'));
   const batches: Array<Promise<void>> = [];
-  for (let offset = 0; offset < core.length; offset += 100) {
-    const batchPaths = core.slice(offset, offset + 100).map(d => d.path);
+  for (let offset = 0; offset < paths.length; offset += 100) {
+    const batchPaths = paths.slice(offset, offset + 100);
     batches.push((async () => {
       const { data, error } = await supabase.from('bookkit_documents').select('path,content,version,revision_id').eq('project_id', projectId).in('path', batchPaths);
       if (error) throw error;
@@ -1890,8 +1890,38 @@ export async function listBookDocuments(projectId: string): Promise<BookDocument
     })());
   }
   await Promise.all(batches);
+}
+
+// Research scans can contain megabytes of OCR. Fetch those only on demand.
+const fetchedUpFront = (path: string) => !path.startsWith('research/');
+
+export async function listBookDocuments(projectId: string): Promise<BookDocumentRow[]> {
+  const [rows, assetRows] = await Promise.all([listBookDocumentVersions(projectId), listBookAssets(projectId)]);
+  await fetchBookContents(projectId, rows, rows.filter(d => fetchedUpFront(d.path)).map(d => d.path));
   rows.push(...assetRows);
   return rows.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Bring a cached copy of a book up to date: list paths and versions (cheap),
+ * then download only documents that are new or changed.
+ */
+export async function refreshBookDocuments(projectId: string, cached: BookDocumentRow[]): Promise<{ rows: BookDocumentRow[]; changed: boolean }> {
+  const [rows, assetRows] = await Promise.all([listBookDocumentVersions(projectId), listBookAssets(projectId)]);
+  const known = new Map(cached.filter(r => !r.asset).map(r => [r.path, r]));
+  const stale: string[] = [];
+  let changed = cached.filter(r => !r.asset).length !== rows.length;
+  rows.forEach((r, i) => {
+    const old = known.get(r.path);
+    if (old && old.version === r.version && (old.loaded || !fetchedUpFront(r.path))) { rows[i] = old; return; }
+    changed = true;
+    if (fetchedUpFront(r.path) || old?.loaded) stale.push(r.path);
+  });
+  await fetchBookContents(projectId, rows, stale);
+  const cachedAssets = new Map(cached.filter(r => r.asset).map(r => [r.path, JSON.stringify(r.asset)]));
+  if (cachedAssets.size !== assetRows.length || assetRows.some(a => cachedAssets.get(a.path) !== JSON.stringify(a.asset))) changed = true;
+  rows.push(...assetRows);
+  return { rows: rows.sort((a, b) => a.path.localeCompare(b.path)), changed };
 }
 export async function readBookDocument(projectId: string, path: string): Promise<BookDocumentRow> {
   const {data,error}=await supabase.from('bookkit_documents').select('path,content,version,revision_id').eq('project_id',projectId).eq('path',path).maybeSingle();

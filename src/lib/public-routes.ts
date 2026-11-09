@@ -31,7 +31,8 @@ export function parsePublicLocation(
   }
 
   if (clean === "/login" || clean === "/sign-in") {
-    return { kind: "login" };
+    // Once signed in, the sign-in address leads into the app.
+    return isAuthenticated ? { kind: "app" } : { kind: "login" };
   }
 
   if (clean === "/features") {
@@ -58,6 +59,13 @@ export function parsePublicLocation(
   }
 
   return { kind: "app" };
+}
+
+/** The address to show after signing in on the sign-in page: the app's home. */
+export function leaveSignInAddress(): void {
+  if (typeof window === "undefined") return;
+  const clean = window.location.pathname.replace(/\/+$/, "");
+  if (clean === "/login" || clean === "/sign-in") window.history.replaceState(null, "", "/" + window.location.search + window.location.hash);
 }
 
 export function navigatePublic(url: string): void {

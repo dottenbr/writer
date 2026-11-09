@@ -84,6 +84,10 @@ export interface BookModel {
 export const slugify = (s: string) =>
   s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[“”"'’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "section";
 
+/** Where a chapter's scene cards live (the file may not exist yet). */
+export const scenesPathFor = (c: { number: number; title: string; scenesPath?: string }) =>
+  c.scenesPath ?? `outline/scenes/${String(c.number).padStart(2, "0")}-${slugify(c.title || "chapter")}.md`;
+
 const pretty = (name: string) =>
   name.replace(/\.(md|ya?ml|txt)$/i, "").replace(/^\d+[-_]/, "").replace(/[-_]+/g, " ").replace(/^\w/, c => c.toUpperCase());
 

@@ -382,6 +382,7 @@ export function Layout() {
   const home = useHomeStore((s) => s.home);
   useLibraryAddress(home);
   const currentProject = useProjectStore((s) => s.currentProject());
+  const catalogBookkit = useProjectStore((s) => s.projectCatalog.find((p) => p.id === s.currentProjectId)?.bookkitSlug != null);
   const catalogStatus = useProjectStore((s) => s.catalogStatus);
   const showApiSettings = useProjectStore((s) => s.showApiSettings);
   const setShowApiSettings = useProjectStore((s) => s.setShowApiSettings);
@@ -392,6 +393,7 @@ export function Layout() {
   );
   const fallback = <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
   if (catalogStatus === "ready" && home) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
+  if (!home && catalogBookkit) return <Suspense fallback={fallback}><Studio />{modal}</Suspense>;
   if (!currentProject && catalogStatus !== "ready") return fallback;
   if (!currentProject) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
   if (currentProject.bookkitSlug) return <Suspense fallback={fallback}><Studio />{modal}</Suspense>;

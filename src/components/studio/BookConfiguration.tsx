@@ -175,7 +175,7 @@ export function BookConfiguration() {
             const fm = formMeta(patch.form ?? model?.form ?? view.form, view.kind);
             const effBook = view.targetWords ?? model?.targetWords ?? fm.defaultTargetWords;
             const effChap = view.chapterWords ?? model?.chapterTargetWords ?? fm.defaultChapterWords;
-            return `${fm.label}: typical range ${fm.rangeLabel}. Current goal: ${effBook.toLocaleString()} words for the book, ~${effChap.toLocaleString()} words per chapter (chapters can also set their own draft_budget_words in front matter).`;
+            return `${fm.label}: typical range ${fm.rangeLabel}. Current goal: ${effBook.toLocaleString("en-US")} words for the book, ~${effChap.toLocaleString("en-US")} words per chapter (chapters can also set their own draft_budget_words in front matter).`;
           })()}
         </p>
         {view.byline === "pen-name" && <p className="settings-hint">“{view.author || "The author"}” is a pen name: it’s the name on the cover, the title page and the metadata. Nothing bookkit builds prints the person behind it.</p>}

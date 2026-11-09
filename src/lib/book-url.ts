@@ -4,6 +4,7 @@
  *
  *   /the-owl-at-dusk                         title page
  *   /the-owl-at-dusk/chapter/2               chapter 2
+ *   /the-owl-at-dusk/chapter/2/plan          its plan and scene cards
  *   /the-owl-at-dusk/plan                    plan board
  *   /the-owl-at-dusk/brief                   brief
  *   /the-owl-at-dusk/outline/chapters        a plan page
@@ -69,7 +70,7 @@ export function routeToUrl(book: string, route: Route, model: BookModel): string
   const scenes = path.match(/^outline\/scenes\/(\d+)[^/]*\.md$/);
   if (scenes) {
     const owner = model.chapters.find(c => c.scenesPath === path) ?? model.chapters.find(c => c.number === Number(scenes[1]));
-    if (owner) return `${base}/chapter/${owner.number}/scenes${hash(anchor)}`;
+    if (owner) return `${base}/chapter/${owner.number}/plan${hash(anchor)}`;
   }
   const page = path.replace(/\.md$/i, "");
   const known = model.companions.some(d => d.path === path) || model.entities.some(e => e.path === path);
@@ -93,7 +94,7 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   if (head === "brief") return { view: "plan", path: "@brief" };
   if (head === "chapter") {
     const chapter = model.chapters.find(c => c.number === Number(rest[0]));
-    if (chapter && rest[1] === "scenes") return { view: "plan", path: chapter.scenesPath ?? `outline/scenes/${String(chapter.number).padStart(2, "0")}-${slugify(chapter.title || "chapter")}.md`, anchor };
+    if (chapter && (rest[1] === "plan" || rest[1] === "scenes")) return { view: "plan", path: chapter.scenesPath ?? `outline/scenes/${String(chapter.number).padStart(2, "0")}-${slugify(chapter.title || "chapter")}.md`, anchor };
     return chapter ? { view: "write", path: chapter.authorPath ?? chapter.currentPath, anchor } : { view: "write", path: "" };
   }
   if (head === "file") {
@@ -158,7 +159,7 @@ export function studioDocumentTitle(
   } else if (view === "plan" && path.startsWith("outline/scenes/")) {
     const num = Number(path.match(/(\d+)[^/]*\.md$/)?.[1]);
     const ch = model.chapters.find(c => c.scenesPath === path) ?? model.chapters.find(c => c.number === num);
-    sub = ch ? `Ch. ${ch.number} Scenes` : "Scene cards";
+    sub = ch ? `Ch. ${ch.number} Plan` : "Chapter plan";
   } else if (view === "bible" && entityKindForPath(path) && anchor && anchor !== FULL_PAGE) {
     const ent = model.entities.find(e => e.path === path && e.slug === anchor);
     sub = ent?.name ?? model.companions.find(d => d.path === path)?.title;

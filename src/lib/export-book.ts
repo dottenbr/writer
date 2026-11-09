@@ -18,6 +18,13 @@ function runs(tokens: Token[] | undefined, style: Omit<Run, "text"> = {}): Run[]
   return out;
 }
 
+/** Pandoc line blocks (`| line`) as ordinary lines that keep their breaks. */
+export function withoutLineBlockBars(markdown: string): string {
+  return markdown
+    .replace(/^((?:>\s*)*)\| (.*)\n(?=(?:>\s*)*\| )/gm, "$1$2  \n")
+    .replace(/^((?:>\s*)*)\| /gm, "$1");
+}
+
 /** A clean reading copy of the manuscript as it stands: your chapters, and the draft where you haven't written yet. */
 export async function exportManuscriptDocx(model: BookModel, files: Array<{ path: string; content: string }>, opts: { authorOnly: boolean }) {
   const { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak } = await import("docx");
@@ -29,18 +36,20 @@ export async function exportManuscriptDocx(model: BookModel, files: Array<{ path
   for (const c of model.chapters) {
     const path = opts.authorOnly ? (c.authorPath && (!c.started || !c.referencePath) ? c.authorPath : undefined) : c.currentPath;
     if (!path) continue;
-    const { body, metadata } = splitDocument(content(path));
+    const { body: source, metadata } = splitDocument(content(path));
+    const body = withoutLineBlockBars(source);
     children.push(new Paragraph({ children: [new PageBreak()] }));
     children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 1200, after: 200 }, children: [new TextRun({ text: `Chapter ${c.number}`, size: 22, font: "Georgia", allCaps: true })] }));
     const title = String(metadata.title ?? c.title ?? "");
     if (title) children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 600 }, children: [new TextRun({ text: title, size: 36, font: "Georgia" })] }));
     let first = true;
     for (const t of marked.lexer(body)) {
-      if (t.type === "space") continue;
+      if (t.type === "space" || (t.type === "html" && /^\s*<!--[\s\S]*-->\s*$/.test(t.raw))) continue;
       if (t.type === "hr") { children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 240, after: 240 }, children: [new TextRun({ text: "* * *", font: "Georgia" })] })); first = true; continue; }
       const toks = t.type === "blockquote" ? (t as Tokens.Blockquote).tokens.flatMap(x => (x as any).tokens ?? []) : (t as any).tokens;
       if (t.type === "list") {
         for (const item of (t as Tokens.List).items) children.push(new Paragraph({ bullet: { level: 0 }, children: runs(item.tokens.flatMap(x => (x as any).tokens ?? [x])).map(r => new TextRun({ ...r, font: "Georgia", size: 24 })) }));
+        first = true;
         continue;
       }
       const rs = runs(toks ?? [t]);
@@ -49,7 +58,8 @@ export async function exportManuscriptDocx(model: BookModel, files: Array<{ path
         indent: t.type === "blockquote" ? { left: 720 } : first || t.type === "heading" ? undefined : { firstLine: 360 },
         children: rs.map(r => new TextRun({ ...r, font: "Georgia", size: t.type === "heading" ? 28 : 24, bold: r.bold || t.type === "heading" })),
       }));
-      first = t.type === "heading";
+      // As on screen: only a paragraph that follows a paragraph is indented.
+      first = t.type !== "paragraph";
     }
   }
   const doc = new Document({ creator: model.author, title: model.title, sections: [{ properties: {}, children }] });
@@ -82,7 +92,7 @@ export function manuscriptText(model: BookModel, files: Array<{ path: string; co
     out.push(opts.plain ? `\n\nCHAPTER ${c.number}${title ? `\n${title}` : ""}\n` : `\n## ${c.number}. ${title}\n`);
     let text = body.trim();
     if (opts.plain) {
-      text = text
+      text = withoutLineBlockBars(text)
         .replace(/^#{1,6}\s+/gm, "")
         .replace(/^\s*(\*\s*\*\s*\*|\*\*\*|---)\s*$/gm, "        *")
         .replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/_([^_\n]+)_/g, "$1")

@@ -4,6 +4,7 @@ import { chapterState, formatWords, Icon, KIND_LABEL } from "./common";
 import { entityKindForPath, sections, type Entity, type EntityKind } from "../../lib/book-model";
 import { EntityTile, KIND_ORDER, KIND_PLURAL, useAppearances } from "./BiblePages";
 import { PlanList } from "./PlanList";
+import { scenesPathFor } from "../../lib/book-model";
 import { prefs, writePrefs } from "../../store/useBookStore";
 import { splitDocument } from "../../lib/markdown-doc";
 
@@ -59,7 +60,7 @@ export function PlanBoard() {
           return (
             <Fragment key={c.number}>
               {part && <div className="grid-part">{part}</div>}
-              <button className={`plan-card ${st.key}`} onClick={() => go(c.authorPath ?? c.currentPath)}>
+              <button className={`plan-card ${st.key}`} onClick={() => go(scenesPathFor(c), { view: "plan" })}>
                 <div className="plan-card-top">
                   <span className="plan-num">{c.number}</span>
                   <span className={`chapter-state ${st.key}`}>{st.label}</span>

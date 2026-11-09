@@ -122,9 +122,9 @@ export function Manage() {
             <div className="manage-overview-meta">
               <span>{project?.bookkitSlug ? `${bookSummary?.chapters??'…'} author chapters · ${bookSummary?.references??'…'} reference chapters` : `${project?.chapters.length??0} sections`}</span>
               <span className="manage-overview-sep" />
-              <span>{totalWordCount.toLocaleString()} words</span>
+              <span>{totalWordCount.toLocaleString("en-US")} words</span>
               <span className="manage-overview-sep" />
-              <span>{progressPct}% of {targetWords.toLocaleString()} target</span>
+              <span>{progressPct}% of {targetWords.toLocaleString("en-US")} target</span>
             </div>
           </div>
           {!project?.bookkitSlug&&<div className="manage-overview-stats">

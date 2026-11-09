@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useBookStore } from "../../store/useBookStore";
 import { entityKindForPath, type CompanionDoc, type Group } from "../../lib/book-model";
 import { chapterForPath, chapterState, formatWords, Icon, useAccess } from "./common";
+import { scenesPathFor } from "../../lib/book-model";
 
 const GROUPS: Array<{ id: Group; label: string }> = [
   { id: "story", label: "Story" },
@@ -31,13 +32,31 @@ function Section({ id, label, count, children, defaultOpen = true }: { id: strin
   );
 }
 
-const SCOPE_GROUPS: Record<"write" | "plan" | "bible", Group[]> = {
-  write: ["craft", "matter", "research", "publication", "source"],
+export type NavScope = "write" | "plan" | "bible" | "craft" | "research" | "book";
+
+/** Each section of the book shows only its own pages. */
+const SCOPE_GROUPS: Record<NavScope, Group[]> = {
+  write: ["matter"],
   plan: ["plan"],
   bible: ["story", "bible"],
+  craft: ["craft"],
+  research: ["research"],
+  book: ["publication", "source"],
 };
 
-export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () => void; scope?: "write" | "plan" | "bible" }) {
+/** The section a place in the book belongs to. */
+export function navScopeFor(view: string, path: string, group?: Group): NavScope | null {
+  if (view === "plan" || view === "bible") return view;
+  if (view !== "write") return null;
+  if (group === "craft" || path.startsWith("craft/")) return "craft";
+  if (group === "research" || path.startsWith("research/")) return "research";
+  if (group === "publication" || group === "source") return "book";
+  return "write";
+}
+
+const SCOPE_TITLE: Record<NavScope, string> = { write: "Manuscript", plan: "Plan", bible: "Story bible", craft: "Craft", research: "Research", book: "Book files" };
+
+export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () => void; scope?: NavScope }) {
   const model = useBookStore(s => s.model);
   const location = useBookStore(s => s.location);
   const view = useBookStore(s => s.view);
@@ -109,13 +128,13 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
   };
 
   return (
-    <nav className="navigator" aria-label="Book contents">
+    <nav className="navigator" aria-label={`${SCOPE_TITLE[scope]} contents`}>
       <div className="nav-book">
         <div className="nav-book-title">{model.title}</div>
         {model.author && <div className="nav-book-author">{model.author}</div>}
-        <div className="nav-progress" title={`${written} of ${model.chapters.length} chapters written by you · ${totalWords.toLocaleString()} of ${model.targetWords.toLocaleString()} words`}>
+        <div className="nav-progress" title={`${written} of ${model.chapters.length} chapters written by you · ${totalWords.toLocaleString("en-US")} of ${model.targetWords.toLocaleString("en-US")} words`}>
           <div className="nav-progress-bar"><span style={{ width: `${model.chapters.length ? (written / model.chapters.length) * 100 : 0}%` }} /></div>
-          <div className="nav-progress-label">{written}/{model.chapters.length} chapters · {formatWords(totalWords)} of {formatWords(model.targetWords)} words{wordsToday > 0 && <span className="nav-today"> · +{wordsToday.toLocaleString()} today</span>}</div>
+          <div className="nav-progress-label">{written}/{model.chapters.length} chapters · {formatWords(totalWords)} of {formatWords(model.targetWords)} words{wordsToday > 0 && <span className="nav-today"> · +{wordsToday.toLocaleString("en-US")} today</span>}</div>
         </div>
       </div>
       <div className="nav-search">
@@ -135,7 +154,7 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
             return (
               <div key={c.number}>
                 {partHeader && <div className="nav-part">{partHeader}</div>}
-                <button className={`nav-item nav-chapter ${activeNumber === c.number ? "active" : ""}`} onClick={() => go(c.authorPath ?? c.referencePath ?? c.currentPath)} title={`${c.label}${c.subtitle ? ` · ${c.subtitle}` : ""} · ${st.label}${c.authorPath ? ` (${c.authorWords.toLocaleString()} of ${c.targetWords.toLocaleString()} words)` : c.targetWords ? ` (goal ${c.targetWords.toLocaleString()} words)` : ""}`}>
+                <button className={`nav-item nav-chapter ${activeNumber === c.number ? "active" : ""}`} onClick={() => go(c.authorPath ?? c.referencePath ?? c.currentPath)} title={`${c.label}${c.subtitle ? ` · ${c.subtitle}` : ""} · ${st.label}${c.authorPath ? ` (${c.authorWords.toLocaleString("en-US")} of ${c.targetWords.toLocaleString("en-US")} words)` : c.targetWords ? ` (goal ${c.targetWords.toLocaleString("en-US")} words)` : ""}`}>
                   <span className={`status-dot ${st.key}`} />
                   <span className="nav-num">{c.number}</span>
                   <span className="nav-item-text">{c.title || `Chapter ${c.number}`}</span>
@@ -150,6 +169,24 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
           <button className={`nav-item ${location.path === "@brief" ? "active" : ""}`} onClick={() => go("@brief")}><Icon name="flag" size={14} /><span className="nav-item-text">Brief</span></button>
           <button className={`nav-item ${view === "plan" && location.path === "" ? "active" : ""}`} onClick={() => go("", { view: "plan" })}><Icon name="grid" size={14} /><span className="nav-item-text">All chapters</span><span className="nav-meta">{model.chapters.length}</span></button>
         </div>}
+        {scope === "plan" && <Section id="plan-chapters" label="Chapter plans" count={model.chapters.length}>
+          {chapters.map(c => {
+            const partHeader = c.part && c.part.key !== lastPart ? c.part.title : null;
+            if (c.part) lastPart = c.part.key;
+            const active = location.path.startsWith("outline/scenes/") && (location.path === c.scenesPath || location.path === scenesPathFor(c));
+            return (
+              <div key={c.number}>
+                {partHeader && <div className="nav-part">{partHeader}</div>}
+                <button className={`nav-item nav-chapter ${active ? "active" : ""}`} onClick={() => go(scenesPathFor(c), { view: "plan" })} title={c.purpose ? c.purpose.replace(/[*_]/g, "") : c.label}>
+                  <span className={`status-dot ${chapterState(c).key}`} />
+                  <span className="nav-num">{c.number}</span>
+                  <span className="nav-item-text">{c.title || `Chapter ${c.number}`}</span>
+                  {c.sceneTitles.length > 0 && <span className="nav-words" title={`${c.sceneTitles.length} scene cards`}>{c.sceneTitles.length} sc.</span>}
+                </button>
+              </div>
+            );
+          })}
+        </Section>}
         {scope === "bible" && <div className="nav-top-items">
           <button className={`nav-item ${view === "bible" && location.path === "" ? "active" : ""}`} onClick={() => go("", { view: "bible" })}><Icon name="person" size={14} /><span className="nav-item-text">Overview</span><span className="nav-meta">{model.entities.length}</span></button>
         </div>}
@@ -157,9 +194,9 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
           const items = docs.filter(d => d.group === g.id);
           if (!items.length) return null;
           return (
-            <Section key={g.id} id={g.id} label={g.label} count={g.id === "research" || g.id === "source" ? items.length : undefined} defaultOpen={!["research", "source", "publication"].includes(g.id)}>
-              {items.slice(0, g.id === "research" && !q ? 60 : undefined).map(docRow)}
-              {g.id === "research" && !q && items.length > 60 && <div className="nav-more">{items.length - 60} more · use the filter</div>}
+            <Section key={g.id} id={g.id} label={g.label} count={g.id === "research" || g.id === "source" ? items.length : undefined} defaultOpen={g.id !== "matter" || scope !== "write"}>
+              {items.slice(0, g.id === "research" && !q ? 200 : undefined).map(docRow)}
+              {g.id === "research" && !q && items.length > 200 && <div className="nav-more">{items.length - 200} more · use the filter</div>}
             </Section>
           );
         })}

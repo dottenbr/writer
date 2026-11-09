@@ -176,7 +176,7 @@ export function LoginScreen() {
           </>
         )}
         {error && <p className="login-error" role="alert">{error}</p>}
-        {note && step === "password" && <p className="login-note">Signed out {new Date(note.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: {note.reason}</p>}
+        {note && step === "password" && <p className="login-note">Signed out {new Date(note.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}: {note.reason}</p>}
         <div className="login-signup-cta">
           <span>New to Bookkit?</span>
           <a

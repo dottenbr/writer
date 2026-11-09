@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBookStore } from "../../store/useBookStore";
 import { useDocSession } from "./useDocSession";
 import { Icon, useAccess } from "./common";
-import { addScene, deleteScene, moveScene, newScenesFile, parseScenes, SCENE_FIELDS, updateScene, type SceneCard, type SceneField } from "../../lib/scene-cards";
-import { saveBookDocument } from "../../lib/supabase-service";
-import { slugify, type ChapterInfo } from "../../lib/book-model";
+import { addScene, deleteScene, moveScene, parseScenes, SCENE_FIELDS, updateScene, type SceneCard, type SceneField } from "../../lib/scene-cards";
+import type { ChapterInfo } from "../../lib/book-model";
 import { InlineMarkdown } from "./InlineMarkdown";
 
 /** A textarea that grows with its text. */
@@ -118,7 +116,7 @@ function SceneCardView({ card, index, count, editable, focused, onChange, onMove
   );
 }
 
-function SceneCards({ path, chapter, anchor }: { path: string; chapter?: ChapterInfo; anchor?: string }) {
+export function SceneCards({ path, chapter, anchor }: { path: string; chapter?: ChapterInfo; anchor?: string }) {
   const { projectId, userId, canEdit, suggesting } = useAccess();
   const session = useDocSession(path, { projectId, userId, editable: canEdit, suggesting });
   const textRef = useRef(session.text);
@@ -153,55 +151,5 @@ function SceneCards({ path, chapter, anchor }: { path: string; chapter?: Chapter
       </div>
       <div className="scene-save muted">{session.state === "saving" ? "Saving…" : session.state === "dirty" ? "Unsaved changes" : session.state === "saved" ? "All changes saved" : ""}</div>
     </>
-  );
-}
-
-/** The scene cards of one chapter, as cards you edit in place. */
-export function SceneBoard({ path, anchor }: { path: string; anchor?: string }) {
-  const model = useBookStore(s => s.model)!;
-  const file = useBookStore(s => s.files.find(f => f.path === path));
-  const go = useBookStore(s => s.go);
-  const upsert = useBookStore(s => s.upsert);
-  const { projectId, isOwner } = useAccess();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const number = Number(path.match(/(\d+)[^/]*\.md$/)?.[1]);
-  const chapter = model.chapters.find(c => c.scenesPath === path) ?? model.chapters.find(c => c.number === number);
-  const index = chapter ? model.chapters.indexOf(chapter) : -1;
-  const prev = index > 0 ? model.chapters[index - 1] : undefined;
-  const next = index >= 0 && index < model.chapters.length - 1 ? model.chapters[index + 1] : undefined;
-  const scenesOf = (c: ChapterInfo) => c.scenesPath ?? `outline/scenes/${String(c.number).padStart(2, "0")}-${slugify(c.title || "chapter")}.md`;
-
-  async function create() {
-    if (!projectId || !chapter) return;
-    setBusy(true); setError("");
-    try {
-      const row = await saveBookDocument(projectId, path, newScenesFile(chapter.number, chapter.title), null);
-      upsert({ ...row, loaded: true });
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
-  }
-
-  return (
-    <div className="board scene-board">
-      <header className="board-head">
-        <div>
-          <div className="doc-eyebrow"><button className="link-btn" onClick={() => go("", { view: "plan" })}>Plan</button><span>· Scene cards</span></div>
-          <h1>{chapter ? `${chapter.number}. ${chapter.title}` : "Scene cards"}</h1>
-          {chapter?.purpose && <p className="board-sub">{chapter.purpose.replace(/[*_]/g, "")}</p>}
-        </div>
-        <div className="board-actions">
-          {prev && <button className="btn btn-sm" onClick={() => go(scenesOf(prev), { view: "plan" })} title={prev.title}><Icon name="back" size={13} /> Ch. {prev.number}</button>}
-          {next && <button className="btn btn-sm" onClick={() => go(scenesOf(next), { view: "plan" })} title={next.title}>Ch. {next.number} <Icon name="chevron" size={13} /></button>}
-          {chapter && <button className="btn btn-sm btn-primary" onClick={() => go(chapter.authorPath ?? chapter.currentPath)}><Icon name="pen" size={13} /> Open the chapter</button>}
-        </div>
-      </header>
-      {file ? <SceneCards key={path} path={path} chapter={chapter} anchor={anchor} /> : (
-        <div className="empty-board">
-          <p>This chapter has no scene cards yet.</p>
-          {isOwner && chapter && <button className="btn btn-primary" disabled={busy} onClick={() => void create()}><Icon name="plus" size={14} /> {busy ? "Creating…" : "Start scene cards"}</button>}
-          {error && <div className="inline-error" role="alert">{error}</div>}
-        </div>
-      )}
-    </div>
   );
 }

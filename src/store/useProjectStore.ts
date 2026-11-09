@@ -606,9 +606,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const previousProjectId = get().currentProjectId;
       if (previousProjectId) cancelScheduledProjectSyncs(previousProjectId);
 
-      set({ catalogStatus: "loading" });
       const existingCatalog = get().projectCatalog;
-      const knownBookkit = existingCatalog.find((p) => p.id === id)?.bookkitSlug != null;
+      const entry = existingCatalog.find((p) => p.id === id);
+      const knownBookkit = entry?.bookkitSlug != null;
+      // A Bookkit book opens at once (its files come from useBookStore); the details below follow.
+      set(knownBookkit ? { catalogStatus: "loading", currentProjectId: id, currentProjectRole: entry!.role } : { catalogStatus: "loading" });
       const [projectCatalog, project, role, llmSettings, comments, exportConfig, inspirationItems, members] = await Promise.all([
         sbListProjects(),
         readProject(id, { isBookkit: knownBookkit }),
@@ -1288,7 +1290,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
               id: crypto.randomUUID(),
               entryType: "timeline",
               category: "Auto",
-              name: `Refresh ${new Date().toLocaleDateString()}`,
+              name: `Refresh ${new Date().toLocaleDateString("en-GB")}`,
               alsoKnownAs: [],
               timeframe: "",
               sources: [],
@@ -1573,7 +1575,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const projectId = get().currentProjectId;
     if (!projectId) return;
     await get().saveToStorage();
-    const msg = note || `Snapshot: ${new Date().toLocaleString()}`;
+    const msg = note || `Snapshot: ${new Date().toLocaleString("en-US")}`;
     await sbCreateSnapshot(projectId, msg);
     await get().refreshProgress();
   },

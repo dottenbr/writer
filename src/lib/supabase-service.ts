@@ -120,8 +120,9 @@ export async function signUp(email: string, password: string, displayName?: stri
   if (error) throw error;
 }
 
+/** Sign out of this browser only. (Supabase's default, scope "global", ends the account's sessions on every device.) */
 export async function signOut(): Promise<void> {
-  const { error } = await supabase.auth.signOut();
+  const { error } = await supabase.auth.signOut({ scope: 'local' });
   if (error) throw error;
 }
 
@@ -129,6 +130,24 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
   const { data } = await supabase.auth.getUser();
   if (!data.user) return null;
   return { id: data.user.id, email: data.user.email ?? "" };
+}
+
+/**
+ * The signed-in user on page load. Returns null only when there is no stored
+ * session or the server says it is no longer valid; a network hiccup is
+ * retried and then falls back to the stored session instead of signing out.
+ */
+export async function restoreSession(): Promise<{ id: string; email: string } | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data, error } = await supabase.auth.getUser();
+    if (data.user) return { id: data.user.id, email: data.user.email ?? "" };
+    const status = (error as { status?: number } | null)?.status ?? 0;
+    if (status >= 400 && status < 500) return null;
+    await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
+  }
+  return { id: session.user.id, email: session.user.email ?? "" };
 }
 
 // ────────────────────────────────────────────────────────────

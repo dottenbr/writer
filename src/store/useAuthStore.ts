@@ -4,6 +4,7 @@ import {
   acceptProjectInvitations,
   signOut as sbSignOut,
   getCurrentUser,
+  restoreSession,
   verifySignInCode,
 } from "../lib/supabase-service";
 
@@ -63,9 +64,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   checkAuth: async () => {
-    const user = await getCurrentUser();
+    const user = await restoreSession().catch(() => null);
     if (user) {
-      await acceptProjectInvitations();
+      await acceptProjectInvitations().catch(() => undefined);
       set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
       return true;
     }

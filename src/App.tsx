@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import { useProjectStore } from "./store/useProjectStore";
 import { useAuthStore } from "./store/useAuthStore";
 import { Layout } from "./components/Layout";
@@ -12,6 +12,7 @@ export default function App() {
   } = useProjectStore();
   const { isAuthenticated, checkAuth } = useAuthStore();
   const didBootstrap = useRef(false);
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     if (didBootstrap.current) return;
@@ -19,7 +20,7 @@ export default function App() {
     // Check if user is already authenticated (session persisted)
     checkAuth().then((authed) => {
       if (authed) void loadFromStorage();
-    });
+    }).finally(() => setChecking(false));
   }, []);
 
   // Auto-save every 30 seconds if dirty
@@ -53,6 +54,10 @@ export default function App() {
     window.addEventListener("pagehide", handlePageHide);
     return () => window.removeEventListener("pagehide", handlePageHide);
   }, [dirty, saveToStorage]);
+
+  if (!isAuthenticated && checking) {
+    return <div className="boot-screen" aria-busy="true"><span className="brand-mark">b</span></div>;
+  }
 
   if (!isAuthenticated) {
     return <LoginScreen />;

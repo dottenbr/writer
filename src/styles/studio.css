@@ -733,3 +733,9 @@ kbd { font-family: var(--ui); font-size: 11px; color: var(--ink-3); border: 1px 
 .login-code-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 14px; }
 .login-subtitle strong { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .login-input.login-code::placeholder { color: var(--ink-3); opacity: 0.35; letter-spacing: 0.2em; }
+
+/* Shown for the moment it takes to restore a saved session on page load. */
+.boot-screen { min-height: 100vh; display: grid; place-items: center; background: var(--bg, var(--surface-2)); }
+.boot-screen .brand-mark { width: 34px; height: 34px; font-size: 22px; border-radius: 9px; opacity: 0.5; animation: boot-pulse 1.2s ease-in-out infinite; }
+@keyframes boot-pulse { 50% { opacity: 0.2; } }
+@media (prefers-reduced-motion: reduce) { .boot-screen .brand-mark { animation: none; } }

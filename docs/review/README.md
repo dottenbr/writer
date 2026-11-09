@@ -125,10 +125,30 @@ All baseline measurements were captured against the commit `28c20e1` before appl
 - **Manuscript View (Desktop & Mobile 360px / 390px / 430px):**
   - [03-manuscript-desktop.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/03-manuscript-desktop.png)
   - [03-manuscript-mobile-360.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/03-manuscript-mobile-360.png) | [03-manuscript-mobile-390.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/03-manuscript-mobile-390.png) | [03-manuscript-mobile-430.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/03-manuscript-mobile-430.png)
-- **Bible, Plan, Settings, and Legacy Inspiration Screen:**
+- **Bible, Plan, Settings, and Inspiration Screen (Before vs. After):**
   - [04-bible-desktop.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/04-bible-desktop.png) | [04-bible-mobile-390.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/04-bible-mobile-390.png)
   - [05-plan-desktop.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/05-plan-desktop.png) | [08-settings-desktop.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/08-settings-desktop.png)
-  - [09-inspiration-before.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/09-inspiration-before.png)
+  - **Before:** [09-inspiration-before.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/09-inspiration-before.png) → **After:** [09-inspiration-after.png](file:///Users/dominik/Development/personal/writer/docs/review/screenshots/09-inspiration-after.png)
+
+### 3.6 Before vs. After Measurements (Verified on `review/audit-and-fixes`)
+
+| Metric | Baseline (`28c20e1`) | After Fixes (`review/audit-and-fixes`) | Improvement |
+|---|---:|---:|---:|
+| **Main Entry JS Bundle (`dist/assets/index-*.js`)** | `1,262.06 kB` (`387.43 kB` gzip) | **`139.01 kB` (`43.40 kB` gzip)** | **-89.0% smaller** |
+| **Login Screen Network Payload (`127.0.0.1:4173`)** | `1,558.4 KB` | **`169.2 KB`** | **-89.1% less data** |
+| **Workspace Home Load (`wsLoadMs`)** | `2,331.4 ms` | **`820.6 ms`** | **-64.8% faster** |
+| **Redundant Legacy Queries on `/` (Workspace Home)** | `16` PostgREST requests | **`0` requests** | **-100% eliminated** |
+| **Open *Cold Solder* to First Paint (`bookOpenMs`)** | `689.5 ms` | **`248.7 ms`** | **-63.9% faster** |
+| **Activate Chapter 1 into Editable ProseMirror** | `452.9 ms` | **`130.8 ms`** | **-71.1% faster** |
+| **Total DOM Nodes Mounted in `ManuscriptView` (*Cold Solder*, 49 ch)** | `12,424` – `17,570` nodes | **`2,142` nodes** | **-82.8% to -87.8% fewer DOM nodes** |
+| **Mounted `<SceneCardInline>` Instances (*Cold Solder*)** | `188` | **`9` (viewport-hydrated)** | **-95.2% fewer components** |
+| **Mounted `.entity-ref` Spans (*Cold Solder*)** | `1,692` – `6,482` | **`56` (viewport-hydrated)** | **-96.7% fewer spans** |
+| **Scroll Frame Latency (`maxFrameMs` across 49 chapters)** | `72.5 ms` (4.3× frame budget) | **`36.3 ms` (`p50 = 16.7 ms`, `p95 = 17.6 ms`)** | **-49.9% peak frame time** |
+| **Chapter Switch Latency (`switchMs`)** | `130.9 ms` | **`94.0 ms`** | **-28.2% faster** |
+| **Keystroke `BookLinks` Update (10,113-word chapter, 350 aliases)** | `p50 = 1.88 ms`, `p95 = 2.38 ms`, `p99 = 4.92 ms` | **`p50 = 0.10 ms`, `p95 = 0.18 ms`, `p99 = 1.46 ms`** | **-94.7% faster (p50) / -92.4% faster (p95)** |
+| **Full Keystroke + `docToMarkdown` (10,113-word chapter)** | `p50 = 6.45 ms`, `p95 = 8.64 ms`, `p99 = 15.17 ms` | **`p50 = 4.70 ms`, `p95 = 6.19 ms`, `p99 = 10.58 ms`** | **-27.1% faster** |
+| **Lossless Markdown Round-Trip (`635` real-book non-research `.md` files)** | `634 / 635` (`1 CRASH` on GFM task list) | **`635 / 635` (`100.0%` exact, `0` crashes)** | **100% lossless** |
+| **Vitest + Bookkit Python Test Suites** | `109` JS + `157` Python tests | **`129` JS + `159` Python tests (`288 / 288` PASS)** | **+22 new regression tests** |
 
 ---
 

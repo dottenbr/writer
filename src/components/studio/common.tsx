@@ -94,7 +94,9 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 
 export function initials(name: string) {
   if (name.includes("@")) name = name.split("@")[0].replace(/[._-]+/g, " ");
-  const words = name.replace(/[“"][^”"]*[”"]/g, " ").replace(/\([^)]*\)/g, " ").split(/[\s@._-]+/).map(w => w.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean);
+  const stripped = name.replace(/[“"][^”"]*[”"]/g, " ");
+  const unquoted = /\p{L}/u.test(stripped) ? stripped : name.replace(/[“”"]/g, " ");
+  const words = unquoted.replace(/\([^)]*\)/g, " ").split(/[\s@._-]+/).map(w => w.replace(/[^\p{L}\p{N}]/gu, "")).filter(Boolean);
   const pick = words.length > 2 ? [words[0], words[words.length - 1]] : words.slice(0, 2);
   return pick.map(s => s[0]!.toUpperCase()).join("") || "?";
 }

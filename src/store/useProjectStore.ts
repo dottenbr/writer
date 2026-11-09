@@ -29,6 +29,7 @@ import {
 } from "../types";
 import {
   getCurrentUser,
+  restoreSession,
   listProjects as sbListProjects,
   readProject,
   createProject as sbCreateProject,
@@ -1361,7 +1362,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     set({ catalogStatus: "loading" });
     try { await loadAll(); } finally { set({ catalogStatus: "ready" }); }
     async function loadAll() {
-    const user = await getCurrentUser();
+    const user = await restoreSession();
     if (!user) {
       useAuthStore.setState({ isAuthenticated: false });
       set({ projects: [], currentProjectId: null });

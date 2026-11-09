@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import type { TabId } from "../types";
-import { Studio, NewBookDialog, useTheme } from "./studio/Studio";
-import { useAuthStore } from "../store/useAuthStore";
+import { Studio } from "./studio/Studio";
+import { useHomeStore } from "../store/useHomeStore";
+import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
+import { Workspace } from "./Workspace";
 
 const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
 const ChapterPlan = lazy(() => import("./ChapterPlan").then((mod) => ({ default: mod.ChapterPlan })));
@@ -333,39 +335,26 @@ function LegacyLayout() {
   );
 }
 
-function Welcome() {
-  const importProjectZip = useProjectStore((s) => s.importProjectZip);
-  const signOut = useAuthStore((s) => s.signOut);
-  const email = useAuthStore((s) => s.userEmail);
-  const [creating, setCreating] = useState(false);
-  const [message, setMessage] = useState("");
-  useTheme();
-  return (
-    <div className="welcome">
-      <div className="welcome-card">
-        <div className="brand large"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></div>
-        <h1>Your books, in one place</h1>
-        <p>Write your manuscript like a document, with the plan, story bible and research one click away. Everything links together.</p>
-        <div className="welcome-actions">
-          <button className="btn btn-primary" onClick={() => setCreating(true)}>Start a new book</button>
-          <label className="btn">
-            Import a Bookkit archive
-            <input type="file" accept=".zip" hidden onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try { await importProjectZip(file, setMessage); } catch (err) { setMessage((err as Error).message); }
-            }} />
-          </label>
-        </div>
-        {message && <p className="welcome-status" role="status">{message}</p>}
-        <div className="welcome-foot">Signed in as {email} · <button className="link-btn" onClick={() => void signOut()}>Sign out</button></div>
-      </div>
-      {creating && <NewBookDialog onClose={() => setCreating(false)} />}
-    </div>
-  );
+/** Back and forward between the workspace and a book. */
+function useHomeHistory() {
+  const setHome = useHomeStore((s) => s.setHome);
+  useEffect(() => {
+    const onPop = () => {
+      if (window.location.pathname === "/") { setHome(true); return; }
+      if (!useHomeStore.getState().home) return; // a book is open: the Studio follows the address
+      setHome(false);
+      const { projectCatalog, currentProjectId, switchProject } = useProjectStore.getState();
+      const id = bookIdForSlug(projectCatalog, urlBookSlug());
+      if (id && id !== currentProjectId) void switchProject(id);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [setHome]);
 }
 
 export function Layout() {
+  useHomeHistory();
+  const home = useHomeStore((s) => s.home);
   const currentProject = useProjectStore((s) => s.currentProject());
   const catalogStatus = useProjectStore((s) => s.catalogStatus);
   const showApiSettings = useProjectStore((s) => s.showApiSettings);
@@ -375,8 +364,9 @@ export function Layout() {
       <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
     </Suspense>
   );
+  if (catalogStatus === "ready" && home) return <>{<Workspace />}{modal}</>;
   if (!currentProject && catalogStatus !== "ready") return <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
-  if (!currentProject) return <>{<Welcome />}{modal}</>;
+  if (!currentProject) return <>{<Workspace />}{modal}</>;
   if (currentProject.bookkitSlug) return <>{<Studio />}{modal}</>;
   return <LegacyLayout />;
 }

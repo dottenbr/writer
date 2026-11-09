@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useBookStore } from "../../store/useBookStore";
+import { prefs, useBookStore, writePrefs } from "../../store/useBookStore";
+import { parseScenes, type SceneCard } from "../../lib/scene-cards";
 import { discardBookDocument, saveBookDocument } from "../../lib/supabase-service";
 import { startChapterContent, type ChapterInfo } from "../../lib/book-model";
 import { countWords, markdownToPlain, setFrontMatterField, splitDocument } from "../../lib/markdown-doc";
@@ -127,6 +128,35 @@ function StartedNotice({ chapter, session }: { chapter: ChapterInfo; session: Do
   );
 }
 
+/** The chapter's scene cards, in the chapter: compact cards that open for editing. */
+function SceneStrip({ chapter }: { chapter: ChapterInfo }) {
+  const file = useBookStore(s => (chapter.scenesPath ? s.files.find(f => f.path === chapter.scenesPath) : undefined));
+  const go = useBookStore(s => s.go);
+  const [open, setOpen] = useState<boolean>(() => prefs().sceneStrip ?? true);
+  const cards = useMemo(() => (file?.content ? parseScenes(file.content) : []), [file?.content]);
+  if (!cards.length) return null;
+  const toggle = () => { setOpen(!open); writePrefs({ sceneStrip: !open }); };
+  const purpose = (c: SceneCard) => (c.fields.find(f => /purpose/i.test(f.label))?.value ?? c.fields.find(f => /what happens/i.test(f.label))?.items[0] ?? "").replace(/[*_]/g, "");
+  return (
+    <div className={`scene-strip ${open ? "open" : ""}`}>
+      <div className="scene-strip-head">
+        <button className="link-btn scene-strip-toggle" onClick={toggle} aria-expanded={open}><Icon name={open ? "down" : "chevron"} size={12} /> {cards.length} scene{cards.length === 1 ? "" : "s"}</button>
+        {open && <button className="link-btn" onClick={() => go(chapter.scenesPath!, { view: "plan" })}>Edit scene cards</button>}
+      </div>
+      {open && (
+        <div className="scene-strip-cards">
+          {cards.map((c, i) => (
+            <button key={c.slug} className="scene-chip" onClick={() => go(chapter.scenesPath!, { anchor: c.slug, view: "plan" })} title={purpose(c)}>
+              <span className="scene-chip-num">{c.number ?? i + 1}</span>
+              <span className="scene-chip-text"><strong>{c.title}</strong>{purpose(c) && <span>{purpose(c)}</span>}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReferenceNotice({ chapter }: { chapter: ChapterInfo }) {
   const { isOwner, projectId } = useAccess();
   const model = useBookStore(s => s.model)!;
@@ -227,6 +257,7 @@ export function ManuscriptView() {
               ref={el => { if (el) refs.current.set(c.number, el); else refs.current.delete(c.number); }}
             >
               <ChapterHeader chapter={c} session={isActive && session?.path === path ? session : null} active={isActive} />
+              <SceneStrip chapter={c} />
               {showReference && <ReferenceNotice chapter={c} />}
               {!showReference && <StartedNotice chapter={c} session={isActive && session?.path === path ? session : null} />}
               {isActive ? (

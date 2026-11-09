@@ -10,7 +10,10 @@ import { ContextPanel } from "./ContextPanel";
 import { Toolbar } from "./Toolbar";
 import { BibleBoard, PlanBoard } from "./Boards";
 import { EntityIndex, EntityPage } from "./BiblePages";
-import { bookIdForSlug, bookSlug, FULL_PAGE, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
+import { SceneBoard } from "./SceneBoard";
+import { TimelinePage } from "./TimelinePage";
+import { bookIdForSlug, bookSlug, FULL_PAGE, navFlags, routeToUrl, urlBookSlug, urlToRoute } from "../../lib/book-url";
+import { useHomeStore } from "../../store/useHomeStore";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { chapterForPath, chapterState, Icon, initials, KIND_LABEL, useAccess } from "./common";
 import { anchorNumbers, entityKindForPath, nextChapterPath } from "../../lib/book-model";
@@ -67,6 +70,8 @@ function BookSwitcher() {
       </button>
       {open && (
         <div className="menu book-menu">
+          <button className="menu-item" onClick={() => { setOpen(false); useHomeStore.getState().showHome(); }}><Icon name="grid" size={15} /> <span className="menu-item-text">All books</span></button>
+          <div className="menu-sep" />
           <div className="menu-label">Your books</div>
           {catalog.map(p => (
             <button key={p.id} className={`menu-item ${p.id === currentId ? "current" : ""}`} onClick={() => { setOpen(false); if (p.id !== currentId) void switchProject(p.id); }}>
@@ -102,6 +107,8 @@ export function NewBookDialog({ onClose }: { onClose: () => void }) {
           writePrefs({ authorName: author.trim() });
           const id = await createBook(title.trim(), author.trim());
           await refreshCatalog();
+          window.history.pushState(null, "", "/" + bookSlug(useProjectStore.getState().projectCatalog, id));
+          useHomeStore.getState().setHome(false);
           await switchProject(id);
           onClose();
         } catch (err) { setError((err as Error).message); setBusy(false); }
@@ -345,11 +352,13 @@ function useUrlSync() {
   const visibleChapter = useBookStore(s => s.visibleChapter);
   const applied = useRef<string | null>(null);
   const justApplied = useRef(false);
+  const replaceNext = useRef(false);
 
   // Opening a book: show the place the address names, if it names this book.
   useEffect(() => {
     if (!model || !bookProject || applied.current === bookProject) return;
     applied.current = bookProject;
+    if (navFlags.openLastPlace) { navFlags.openLastPlace = false; replaceNext.current = true; return; }
     if (bookIdForSlug(catalog, urlBookSlug()) === bookProject) {
       const route = urlToRoute(window.location.pathname, window.location.hash, model);
       if (route) { justApplied.current = true; useBookStore.getState().applyRoute(route); }
@@ -365,7 +374,7 @@ function useUrlSync() {
     if (justApplied.current) { justApplied.current = false; return; }
     const url = routeToUrl(bookSlug(catalog, bookProject), { view, path: location.path, anchor: location.anchor }, model);
     if (url === window.location.pathname + window.location.hash) return;
-    if (first || window.location.pathname === "/") window.history.replaceState(null, "", url);
+    if (first || replaceNext.current || window.location.pathname === "/") { replaceNext.current = false; window.history.replaceState(null, "", url); }
     else window.history.pushState(null, "", url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, location.nonce, bookProject, applied.current, model ? 1 : 0]);
@@ -384,6 +393,7 @@ function useUrlSync() {
   // Back and forward.
   useEffect(() => {
     const onPop = () => {
+      if (window.location.pathname === "/") return; // the workspace takes over
       const id = bookIdForSlug(catalog, urlBookSlug());
       const book = useBookStore.getState();
       if (id && id !== book.projectId) { void switchProject(id); return; }
@@ -415,29 +425,36 @@ function Presence() {
 
 function PasswordDialog({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState("");
+  const [repeat, setRepeat] = useState("");
   const [state, setState] = useState<"" | "saving" | "done">("");
+  const mismatch = repeat.length > 0 && repeat !== value;
   const [error, setError] = useState("");
   return (
     <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <form className="dialog" onSubmit={async e => {
-        e.preventDefault(); setError(""); setState("saving");
+        e.preventDefault(); setError("");
+        if (value !== repeat) { setError("The two passwords don’t match."); return; }
+        setState("saving");
         try { await setAccountPassword(value); setState("done"); } catch (err) { setError((err as Error).message); setState(""); }
       }}>
         <h2>Set a password</h2>
-        <p className="dialog-sub">Use it to sign in next time with your email and password, instead of a sign-in link.</p>
+        <p className="dialog-sub">Use it to sign in with your email and password, instead of a code.</p>
         <label className="field">New password<input type="password" autoComplete="new-password" autoFocus value={value} onChange={e => setValue(e.target.value)} minLength={10} /></label>
+        <label className="field">Type it again<input type="password" autoComplete="new-password" value={repeat} onChange={e => setRepeat(e.target.value)} aria-invalid={mismatch} /></label>
+        {value.length > 0 && value.length < 10 && <div className="field-hint">At least 10 characters.</div>}
+        {mismatch && <div className="field-hint warn">The passwords don’t match yet.</div>}
         {error && <div className="inline-error" role="alert">{error}</div>}
         {state === "done" && <div className="save-notice" role="status">Password saved.</div>}
         <div className="dialog-actions">
           <button type="button" className="btn" onClick={onClose}>{state === "done" ? "Close" : "Cancel"}</button>
-          {state !== "done" && <button type="submit" className="btn btn-primary" disabled={state === "saving" || value.length < 10}>{state === "saving" ? "Saving…" : "Save password"}</button>}
+          {state !== "done" && <button type="submit" className="btn btn-primary" disabled={state === "saving" || value.length < 10 || value !== repeat}>{state === "saving" ? "Saving…" : "Save password"}</button>}
         </div>
       </form>
     </div>
   );
 }
 
-function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
+export function UserMenu({ theme, setTheme }: { theme: "light" | "dark"; setTheme: (t: "light" | "dark") => void }) {
   const email = useAuthStore(s => s.userEmail) ?? "";
   const signOut = useAuthStore(s => s.signOut);
   const setShowApiSettings = useProjectStore(s => s.setShowApiSettings);
@@ -570,20 +587,23 @@ export function Studio() {
   const path = location.path;
   const isChapter = path === "" || !!chapterForPath(model.chapters, path);
   const entityFile = !!entityKindForPath(path);
+  const timelineFile = /^bible\/.*(timeline|chronology)[^/]*\.md$/i.test(path);
   let content: React.ReactNode = null;
   let isDoc = false;
   if (view === "write") {
     content = path === "@brief" ? <BriefPage /> : isChapter ? <ManuscriptView /> : <CompanionView />;
     isDoc = path !== "@brief";
   } else if (view === "plan") {
-    content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : <CompanionView />;
-    isDoc = !!path && path !== "@brief";
+    const scenes = path.startsWith("outline/scenes/");
+    content = !path ? <PlanBoard /> : path === "@brief" ? <BriefPage /> : scenes ? <SceneBoard path={path} anchor={location.anchor} /> : <CompanionView />;
+    isDoc = !!path && path !== "@brief" && !scenes;
   } else if (view === "bible") {
     if (!path) content = <BibleBoard />;
     else if (entityFile && location.anchor && location.anchor !== FULL_PAGE) content = <EntityPage path={path} slug={location.anchor} />;
     else if (entityFile && !location.anchor) content = <EntityIndex path={path} />;
+    else if (timelineFile && location.anchor !== FULL_PAGE) content = <TimelinePage path={path} />;
     else content = <CompanionView />;
-    isDoc = !!path && (!entityFile || !!location.anchor);
+    isDoc = !!path && (!entityFile || !!location.anchor) && !(timelineFile && location.anchor !== FULL_PAGE);
   }
   const scope = view === "write" || view === "plan" || view === "bible" ? view : null;
   const showPanel = isDoc || (view === "write" && path !== "@brief");
@@ -593,7 +613,7 @@ export function Studio() {
       <header className="topbar">
         <div className="topbar-left">
           <button className="icon-btn" onClick={() => setNavOpen(!navOpen)} aria-label={navOpen ? "Hide contents" : "Show contents"} title="Contents"><Icon name="sidebar" size={18} /></button>
-          <div className="brand"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></div>
+          <button className="brand brand-home" onClick={() => useHomeStore.getState().showHome()} title="All your books"><span className="brand-mark">b</span><span className="brand-name">bookkit</span></button>
           <span className="topbar-slash">/</span>
           <BookSwitcher />
         </div>

@@ -4,18 +4,33 @@ import { useAuthStore } from "../store/useAuthStore";
 
 const RESEND_SECONDS = 60;
 
+function linkFailure(): { email: string; error: string } | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem("bookkit-link-failed") ?? "null");
+    sessionStorage.removeItem("bookkit-link-failed");
+    return value;
+  } catch { return null; }
+}
+
 export function LoginScreen() {
   const { signIn, signInWithCode } = useAuthStore();
-  const [email, setEmail] = useState("");
+  const [failed] = useState(linkFailure);
+  const [email, setEmail] = useState(failed?.email ?? "");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [step, setStep] = useState<"password" | "code">("password");
+  const [error, setError] = useState(failed ? `The sign-in link didn’t work: ${failed.error}` : "");
+  const [step, setStep] = useState<"password" | "code">(failed ? "code" : "password");
   const [sent, setSent] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [pending, setPending] = useState<"password" | "email" | "code" | null>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const loading = pending !== null;
+  const [note] = useState(() => {
+    try {
+      const n = JSON.parse(localStorage.getItem("bookkit-auth-note") ?? "null");
+      return n && Date.now() - Date.parse(n.at) < 86400000 ? n as { reason: string; at: string } : null;
+    } catch { return null; }
+  });
   const validEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
 
   useEffect(() => {
@@ -49,7 +64,7 @@ export function LoginScreen() {
 
   const submitCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (code.replace(/\D/g, "").length < 6) return;
+    if (code.replace(/\D/g, "").length !== 6) return;
     setPending("code"); setError("");
     try { await signInWithCode(email, code); }
     catch (err) { setError((err as Error).message); setPending(null); }
@@ -93,7 +108,7 @@ export function LoginScreen() {
             <h1 className="login-title">{sent ? "Check your email" : "Enter your code"}</h1>
             <p className="login-subtitle">
               {sent
-                ? <>If <strong>{email.trim()}</strong> has a Bookkit account, a code is on its way. It expires in an hour.</>
+                ? <>If <strong>{email.trim()}</strong> has a Bookkit account, a 6-digit code is on its way. It expires in 15 minutes.</>
                 : <>Enter the code from your Bookkit email for <strong>{email.trim()}</strong>.</>}
             </p>
             <form onSubmit={submitCode} className="login-form">
@@ -105,14 +120,14 @@ export function LoginScreen() {
                   name="one-time-code"
                   autoComplete="one-time-code"
                   inputMode="numeric"
-                  maxLength={11}
-                  placeholder="1234 5678"
+                  maxLength={7}
+                  placeholder="123 456"
                   value={code}
-                  onChange={e => setCode(e.target.value.replace(/[^\d ]/g, ""))}
+                  onChange={e => { const d = e.target.value.replace(/\D/g, "").slice(0, 6); setCode(d.length > 3 ? d.slice(0, 3) + " " + d.slice(3) : d); }}
                   required
                 />
               </label>
-              <button type="submit" className="login-button" disabled={loading || code.replace(/\D/g, "").length < 6}>
+              <button type="submit" className="login-button" disabled={loading || code.replace(/\D/g, "").length !== 6}>
                 {pending === "code" ? "Signing in…" : "Sign in"}
               </button>
             </form>
@@ -126,6 +141,7 @@ export function LoginScreen() {
           </>
         )}
         {error && <p className="login-error" role="alert">{error}</p>}
+        {note && step === "password" && <p className="login-note">Signed out {new Date(note.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: {note.reason}</p>}
       </div>
     </div>
   );

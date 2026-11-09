@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addSection, findSection, removeSection, renameSection, replaceSectionBody, sectionBody, sectionFields } from "./entity-section";
+import { addSection, entryOps, findSection, removeSection, renameSection, replaceSectionBody, sectionBody, sectionFields } from "./entity-section";
 import { buildBookModel } from "./book-model";
 import { routeToUrl, urlToRoute, viewForPath, bookSlug, bookIdForSlug, FULL_PAGE } from "./book-url";
 
@@ -80,5 +80,22 @@ describe("book URLs", () => {
     expect(bookSlug(catalog, "bbbbbbbb-2")).toBe("draft-bbbbbbbb");
     expect(bookIdForSlug(catalog, "draft-cccccccc")).toBe("cccccccc-3");
     expect(bookIdForSlug(catalog, "the-owl-at-dusk")).toBe("aaaaaaaa-1");
+  });
+});
+
+describe("bullet entries", () => {
+  const MOTIFS = "# Motifs\n\nRefrains.\n\n- **Counting.** Nora counts the goats (*Ch. 1*).\n- **“How do you know?”** Her question (*Ch. 1*);\n  the Owl’s question (*Ch. 2*).\n- **Red ribbon:** her only one.\n\nClosing note.\n";
+  const ops = entryOps("bullet");
+  it("reads entries written as bold-named bullets", async () => {
+    const { bulletEntries } = await import("./book-model");
+    expect(bulletEntries(MOTIFS).map(b => b.name)).toEqual(["Counting", "“How do you know?”", "Red ribbon"]);
+    expect(ops.body(MOTIFS, "how-do-you-know")).toBe("Her question (*Ch. 1*);\nthe Owl’s question (*Ch. 2*).");
+  });
+  it("edits, renames, removes and adds one bullet, keeping the rest byte for byte", () => {
+    const edited = ops.replace(MOTIFS, "counting", "Nora counts everything.");
+    expect(edited).toBe(MOTIFS.replace("Nora counts the goats (*Ch. 1*).", "Nora counts everything."));
+    expect(ops.rename(MOTIFS, "red-ribbon", "The red ribbon")).toContain("- **The red ribbon:** her only one.");
+    expect(ops.remove(MOTIFS, "how-do-you-know")).toBe("# Motifs\n\nRefrains.\n\n- **Counting.** Nora counts the goats (*Ch. 1*).\n- **Red ribbon:** her only one.\n\nClosing note.\n");
+    expect(ops.add(MOTIFS, "Snow")).toContain("- **Red ribbon:** her only one.\n- **Snow:**\n\nClosing note.");
   });
 });

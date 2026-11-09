@@ -121,9 +121,14 @@ export async function signUp(email: string, password: string, displayName?: stri
 }
 
 /** Sign out of this browser only. (Supabase's default, scope "global", ends the account's sessions on every device.) */
+export const signingOut = { current: false };
 export async function signOut(): Promise<void> {
-  const { error } = await supabase.auth.signOut({ scope: 'local' });
-  if (error) throw error;
+  signingOut.current = true;
+  try {
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) throw error;
+  } finally { setTimeout(() => { signingOut.current = false; }, 1000); }
+  try { localStorage.removeItem("bookkit-auth-note"); } catch { /* storage unavailable */ }
 }
 
 export async function getCurrentUser(): Promise<{ id: string; email: string } | null> {
@@ -132,24 +137,53 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
   return { id: data.user.id, email: data.user.email ?? "" };
 }
 
-/**
- * The signed-in user on page load. Returns null only when there is no stored
- * session or the server says it is no longer valid; a network hiccup is
- * retried and then falls back to the stored session instead of signing out.
- */
-export async function restoreSession(): Promise<{ id: string; email: string } | null> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) return null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const { data, error } = await supabase.auth.getUser();
-    if (data.user) return { id: data.user.id, email: data.user.email ?? "" };
-    const status = (error as { status?: number } | null)?.status ?? 0;
-    if (status >= 400 && status < 500) return null;
-    await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
-  }
-  return { id: session.user.id, email: session.user.email ?? "" };
+/** The session Supabase keeps in this browser, read directly (no lock, no network). */
+export function storedSession(): { user: { id: string; email?: string }; refresh_token: string } | null {
+  try {
+    const key = Object.keys(localStorage).find(k => /^sb-.+-auth-token$/.test(k));
+    const value = key ? JSON.parse(localStorage.getItem(key) ?? "null") : null;
+    const session = value?.currentSession ?? value;
+    return session?.refresh_token && session?.user?.id ? session : null;
+  } catch { return null; }
 }
 
+/** Why the last automatic sign-out happened, shown on the sign-in screen. */
+export function noteSignOutReason(reason: string) {
+  try { localStorage.setItem("bookkit-auth-note", JSON.stringify({ reason, at: new Date().toISOString() })); } catch { /* storage unavailable */ }
+}
+
+const SIGNED_OUT = /session_not_found|refresh_token_not_found|refresh_token_already_used|invalid refresh token|user_not_found|session.*(missing|expired)|jwt/i;
+
+/**
+ * The signed-in user on page load. Returns null only when this browser has no
+ * saved session, or the server says that session has ended. Anything else
+ * (a busy auth lock held by another tab, a network hiccup) is retried, and
+ * in the worst case the saved session is used as it is.
+ */
+export async function restoreSession(): Promise<{ id: string; email: string } | null> {
+  const saved = storedSession();
+  if (!saved) return null;
+  let last = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (data.user) return { id: data.user.id, email: data.user.email ?? "" };
+      const status = (error as { status?: number } | null)?.status ?? 0;
+      const code = `${(error as { code?: string } | null)?.code ?? ""} ${error?.message ?? ""}`;
+      last = code.trim() || `status ${status}`;
+      if ((status === 401 || status === 403 || status === 400) && SIGNED_OUT.test(code)) {
+        noteSignOutReason(`The server ended this session (${last}).`);
+        return null;
+      }
+      if (!storedSession()) { noteSignOutReason(`The saved session was removed (${last}).`); return null; }
+    } catch (e) {
+      last = (e as Error).message;
+    }
+    await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+  }
+  console.warn("[bookkit] could not confirm the session, using the saved one:", last);
+  return { id: saved.user.id, email: saved.user.email ?? "" };
+}
 // ────────────────────────────────────────────────────────────
 // User Config (localStorage — not Supabase)
 // ────────────────────────────────────────────────────────────
@@ -1853,8 +1887,11 @@ export async function requestSignInEmail(email: string): Promise<void> {
 }
 
 export async function verifySignInCode(email: string, token: string): Promise<void> {
- const {error}=await supabase.auth.verifyOtp({email:email.trim(),token:token.replace(/\D/g,''),type:'email'});
- if(error)throw new Error(/expired|invalid/i.test(error.message)?'That code is wrong or has expired. Check the latest email, or send a new code.':error.message);
+ const res=await fetch('/api/sign-in-verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.trim(),code:token.replace(/\D/g,'')})});
+ const body=await res.json().catch(()=>null);
+ if(!res.ok||!body?.access_token)throw new Error(body?.error??'Could not sign in with that code. Try again.');
+ const {error}=await supabase.auth.setSession({access_token:body.access_token,refresh_token:body.refresh_token});
+ if(error)throw error;
 }
 export async function updateProjectMemberRole(projectId: string, userId: string, role: 'coauthor'|'editor'|'viewer'): Promise<void> {
  const pending=userId.startsWith('invitation:');
@@ -1993,4 +2030,28 @@ export async function setAccountPassword(password: string): Promise<void> {
   if (password.length < 10) throw new Error('Use at least 10 characters.');
   const { error } = await supabase.auth.updateUser({ password });
   if (error) throw error;
+}
+
+export interface WorkspaceBook {
+  project_id: string;
+  name: string;
+  role: string;
+  owner_name: string | null;
+  is_bookkit: boolean;
+  created_at: string;
+  last_worked_at: string | null;
+  last_worked_by: string | null;
+  author_words: number;
+  draft_words: number;
+  chapters_total: number;
+  chapters_written: number;
+  target_words: number;
+  activity: Array<{ day: string; edits: number; words: number }>;
+}
+
+/** Every book you can open, with progress and daily activity for the workspace. */
+export async function loadWorkspace(days = 84): Promise<WorkspaceBook[]> {
+  const { data, error } = await supabase.rpc('bookkit_workspace', { p_days: days });
+  if (error) throw error;
+  return (data ?? []) as WorkspaceBook[];
 }

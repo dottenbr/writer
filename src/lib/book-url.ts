@@ -66,6 +66,11 @@ export function routeToUrl(book: string, route: Route, model: BookModel): string
   if (!path) return view === "write" ? base : `${base}/${view}`;
   const chapter = chapterForPath(model.chapters, path);
   if (chapter) return `${base}/chapter/${chapter.number}${hash(anchor)}`;
+  const scenes = path.match(/^outline\/scenes\/(\d+)[^/]*\.md$/);
+  if (scenes) {
+    const owner = model.chapters.find(c => c.scenesPath === path) ?? model.chapters.find(c => c.number === Number(scenes[1]));
+    if (owner) return `${base}/chapter/${owner.number}/scenes${hash(anchor)}`;
+  }
   const page = path.replace(/\.md$/i, "");
   const known = model.companions.some(d => d.path === path) || model.entities.some(e => e.path === path);
   const prefix = known && /\.md$/i.test(path) ? encodePath(page) : "file/" + encodePath(path);
@@ -88,6 +93,7 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   if (head === "brief") return { view: "plan", path: "@brief" };
   if (head === "chapter") {
     const chapter = model.chapters.find(c => c.number === Number(rest[0]));
+    if (chapter && rest[1] === "scenes") return { view: "plan", path: chapter.scenesPath ?? `outline/scenes/${String(chapter.number).padStart(2, "0")}-${slugify(chapter.title || "chapter")}.md`, anchor };
     return chapter ? { view: "write", path: chapter.authorPath ?? chapter.currentPath, anchor } : { view: "write", path: "" };
   }
   if (head === "file") {
@@ -105,3 +111,6 @@ export function urlToRoute(pathname: string, hash: string, model: BookModel): Ro
   }
   return null;
 }
+
+/** Opening a book from the workspace: go to where you left off, not the title page. */
+export const navFlags = { openLastPlace: false };

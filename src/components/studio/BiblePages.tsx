@@ -6,7 +6,7 @@ import { RichEditor } from "./RichEditor";
 import { formatWords, Icon, initials, KIND_LABEL, useAccess, useEntityMatcher } from "./common";
 import { entityKindForPath, entityMatcher, mentionsIn, slugify, type Entity, type EntityKind } from "../../lib/book-model";
 import { markdownToHtml, markdownToPlain, splitDocument } from "../../lib/markdown-doc";
-import { addSection, removeSection, renameSection, replaceSectionBody, sectionBody, sectionFields } from "../../lib/entity-section";
+import { entryFormFor, entryOps, sectionFields } from "../../lib/entity-section";
 import { FULL_PAGE } from "../../lib/book-url";
 import { saveBookDocument } from "../../lib/supabase-service";
 
@@ -29,12 +29,15 @@ export function useAppearances(): Map<string, number[]> {
   }, [model.chapters, files, matcher]);
 }
 
+/** Plain text for a card: chapter citations dropped, spacing and punctuation tidied. */
+const tidy = (t: string) => t.replace(/\(\s*\*?Chs?\.[^)]*\)/g, "").replace(/\s+([,;.:!?])/g, "$1").replace(/\(\s*\)/g, "").replace(/\s+/g, " ").trim();
+
 /** The short line under a card's name: the first field (Role, Where…) or the first sentence. */
 function tagline(e: Entity): string {
   const fields = sectionFields(e.markdown);
   const role = fields.find(f => /^(role|who|what|where|kind|type)$/i.test(f.label)) ?? fields[0];
   const text = role ? role.value : e.summary;
-  return markdownToPlain(text).replace(/\(\*?Chs?\.[^)]*\)/g, "").replace(/\s+/g, " ").trim();
+  return tidy(markdownToPlain(text));
 }
 
 export function EntityTile({ entity, chapters, onOpen }: { entity: Entity; chapters?: number[]; onOpen: () => void }) {
@@ -51,7 +54,7 @@ export function EntityTile({ entity, chapters, onOpen }: { entity: Entity; chapt
       <p className="entity-tile-summary">{tagline(entity) || "No description yet."}</p>
       {fields.length > 0 && (
         <dl className="entity-tile-fields">
-          {fields.map(f => <div key={f.label}><dt>{f.label}</dt><dd>{markdownToPlain(f.value).replace(/\(\*?Chs?\.[^)]*\)/g, "").trim()}</dd></div>)}
+          {fields.map(f => <div key={f.label}><dt>{f.label}</dt><dd>{tidy(markdownToPlain(f.value))}</dd></div>)}
         </dl>
       )}
     </button>
@@ -77,7 +80,7 @@ export function EntityIndex({ path }: { path: string }) {
   const intro = useMemo(() => {
     if (!file?.content) return "";
     const body = splitDocument(file.content).body;
-    const lead = body.split(/^## /m)[0];
+    const lead = body.split(/^## |^[-*]\s+\*\*/m)[0];
     return lead.split(/\n\s*\n/).map(p => p.trim()).filter(p => p && !p.startsWith("#")).join("\n\n");
   }, [file?.content]);
   const shown = entities.filter(e => !q || (e.name + " " + e.markdown).toLowerCase().includes(q.toLowerCase()));
@@ -88,7 +91,7 @@ export function EntityIndex({ path }: { path: string }) {
     if (entities.some(e => e.slug === slugify(clean))) { setError(`There is already an entry called ${clean}.`); return; }
     setBusy(true); setError("");
     try {
-      const row = await saveBookDocument(projectId, path, addSection(file.content, clean), file.version);
+      const row = await saveBookDocument(projectId, path, entryOps(entryFormFor(file.content)).add(file.content, clean), file.version);
       upsert({ ...row, loaded: true });
       setAdding(false); setName("");
       setTimeout(() => go(path, { anchor: slugify(clean), view: "bible" }), 450);
@@ -146,13 +149,16 @@ export function EntityPage({ path, slug }: { path: string; slug: string }) {
   useEffect(() => { setBusSession(session); }, [session, setBusSession]);
   useEffect(() => () => { setBusSession(null); setBusEditor(null); setSelection(""); }, [setBusSession, setBusEditor, setSelection]);
 
-  const body = useMemo(() => sectionBody(session.text, slug), [session.text, slug]);
+  const ops = useMemo(() => entryOps(entryFormFor(session.text)), [session.text]);
+  const body = useMemo(() => ops.body(session.text, slug), [ops, session.text, slug]);
   const lossless = useMemo(() => (body == null ? true : markdownToHtml(body).lossless), [body]);
   const siblings = model.entities.filter(e => e.path === path);
   const entity = siblings.find(e => e.slug === slug);
   const heading = useMemo(() => {
     const line = session.text.split("\n").find(l => l.startsWith("## ") && slugify(l.slice(3).replace(/[*_`]/g, "")) === slug);
-    return line ? line.slice(3).trim() : entity?.name ?? "";
+    if (line) return line.slice(3).trim();
+    const bullet = session.text.split("\n").map(l => l.match(/^[-*]\s+\*\*(.+?)\*\*/)?.[1]?.replace(/[.:]\s*$/, "").trim()).find(n => n && slugify(n.replace(/[*_`]/g, "")) === slug);
+    return bullet ?? entity?.name ?? "";
   }, [session.text, slug, entity]);
   const [name, setName] = useState(heading);
   useEffect(() => setName(heading), [heading]);
@@ -178,7 +184,7 @@ export function EntityPage({ path, slug }: { path: string; slug: string }) {
   const rename = () => {
     const clean = name.trim();
     if (!clean || clean === heading || !canEdit) { setName(heading); return; }
-    session.setText(renameSection(textRef.current, slug, clean));
+    session.setText(ops.rename(textRef.current, slug, clean));
     go(path, { anchor: slugify(clean), view: "bible" });
   };
 
@@ -211,12 +217,12 @@ export function EntityPage({ path, slug }: { path: string; slug: string }) {
           links={links}
           onReady={setBusEditor}
           onSelection={setSelection}
-          onChange={next => session.setText(replaceSectionBody(textRef.current, slug, next))}
+          onChange={next => session.setText(ops.replace(textRef.current, slug, next))}
         />
       ) : (
         <div className="markdown-mode">
           <p className="markdown-mode-note">This entry uses formatting the visual editor can’t keep exactly, so it opens as plain Markdown.</p>
-          <textarea className="markdown-source" value={body} spellCheck onChange={e => session.setText(replaceSectionBody(textRef.current, slug, e.target.value))} aria-label="Entry text" />
+          <textarea className="markdown-source" value={body} spellCheck onChange={e => session.setText(ops.replace(textRef.current, slug, e.target.value))} aria-label="Entry text" />
         </div>
       )}
       {chapters.length > 0 && single && (
@@ -233,7 +239,7 @@ export function EntityPage({ path, slug }: { path: string; slug: string }) {
       <footer className="entity-foot">
         <span className="muted">{formatWords(markdownToPlain(body).split(/\s+/).filter(Boolean).length)} words · part of the <button className="link-btn inline" onClick={() => go(path, { anchor: FULL_PAGE, view: "bible" })}>{doc?.title.toLowerCase() ?? "bible"} page</button></span>
         {isOwner && (confirmDelete ? (
-          <span className="confirm-inline">Delete {heading}? <button className="btn btn-sm btn-danger" disabled={leaving} onClick={() => { setLeaving(true); session.setText(removeSection(textRef.current, slug)); }}>{leaving ? "Deleting…" : "Delete"}</button><button className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Keep</button></span>
+          <span className="confirm-inline">Delete {heading}? <button className="btn btn-sm btn-danger" disabled={leaving} onClick={() => { setLeaving(true); session.setText(ops.remove(textRef.current, slug)); }}>{leaving ? "Deleting…" : "Delete"}</button><button className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Keep</button></span>
         ) : <button className="link-btn danger" onClick={() => setConfirmDelete(true)}>Delete entry</button>)}
       </footer>
     </div>

@@ -3,6 +3,8 @@ import { useProjectStore } from "./store/useProjectStore";
 import { useAuthStore } from "./store/useAuthStore";
 import { Layout } from "./components/Layout";
 import { LoginScreen } from "./components/LoginScreen";
+import { supabase } from "./lib/supabase-client";
+import { noteSignOutReason, signingOut } from "./lib/supabase-service";
 
 export default function App() {
   const {
@@ -12,15 +14,46 @@ export default function App() {
   } = useProjectStore();
   const { isAuthenticated, checkAuth } = useAuthStore();
   const didBootstrap = useRef(false);
+  const didBootstrapLogin = useRef(false);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     if (didBootstrap.current) return;
     didBootstrap.current = true;
     // Check if user is already authenticated (session persisted)
-    checkAuth().then((authed) => {
-      if (authed) void loadFromStorage();
-    }).finally(() => setChecking(false));
+    const start = async () => {
+      // The link in a sign-in email: /sign-in?email=…&code=…
+      const params = new URLSearchParams(window.location.search);
+      const email = params.get("email"), code = params.get("code");
+      if (window.location.pathname === "/sign-in") {
+        window.history.replaceState(null, "", "/");
+        if (email && code) {
+          try { await useAuthStore.getState().signInWithCode(email, code); return; }
+          catch (e) { try { sessionStorage.setItem("bookkit-link-failed", JSON.stringify({ email, error: (e as Error).message })); } catch { /* storage unavailable */ } }
+        }
+      }
+      if (await checkAuth()) void loadFromStorage();
+    };
+    void start().finally(() => setChecking(false));
+  }, []);
+
+  // Follow Supabase's own view of the session: a session confirmed late gets
+  // you in; a session ended by the server signs you out.
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      const auth = useAuthStore.getState();
+      if ((event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") && session && !auth.isAuthenticated && !didBootstrapLogin.current) {
+        didBootstrapLogin.current = true;
+        useAuthStore.setState({ userId: session.user.id, userEmail: session.user.email ?? null, isAuthenticated: true });
+        void loadFromStorage();
+      }
+      if (event === "SIGNED_OUT" && auth.isAuthenticated && !signingOut.current) {
+        noteSignOutReason("The session ended (signed out in Supabase).");
+        useAuthStore.setState({ userId: null, userEmail: null, isAuthenticated: false });
+      }
+    });
+    return () => data.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-save every 30 seconds if dirty

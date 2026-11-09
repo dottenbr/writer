@@ -33,6 +33,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     if (!alreadySignedIn) await sbSignIn(email, password);
     const user = await getCurrentUser();
     if (user) {
+      try { localStorage.removeItem("bookkit-auth-note"); } catch { /* storage unavailable */ }
       await acceptProjectInvitations();
       set({ userId: user.id, userEmail: user.email, isAuthenticated: true });
       // Dynamic import to break circular dependency (useProjectStore imports useAuthStore)

@@ -18,6 +18,9 @@ Every book is stored as Bookkit files (`book.yaml`, `manuscript/`, `draft/`, `bi
 - `CompanionView.tsx` — bible / plan / craft pages as rich documents.
 - `ContextPanel.tsx` — chapter plan + scene cards, mentioned bible entries, "referenced in", reference draft, comments and suggestions, AI assist.
 - `Boards.tsx` — Plan board (cards, or `PlanList.tsx` list with drag-to-reorder via `src/lib/reorder.ts`) and Bible board (entity cards with kind filters).
+- `SceneBoard.tsx` — a chapter's scene cards (`outline/scenes/NN-*.md`, URL `/<book>/chapter/N/scenes`) as editable cards (click a field to edit, one row per beat, add/move/delete); `src/lib/scene-cards.ts` rewrites only the edited scene. The manuscript shows a compact scene strip under each chapter heading.
+- `TimelinePage.tsx` — `bible/*timeline*.md` (`## Period` sections with When/What/Anchor tables, `src/lib/timeline.ts`) as a vertical timeline; add/edit/move events and periods.
+- `src/components/Workspace.tsx` — the home page at `/`: your books and books shared with you, progress, last worked on, a 12-week activity calendar and per-book sparklines, from the `bookkit_workspace()` RPC and `bookkit_daily_activity` (written by a trigger on `bookkit_documents`).
 - `BriefPage.tsx` — logline, genre, readers, comparable titles, themes, target length (location `@brief`); the Inspiration view reuses `Inspiration.tsx`.
 - `useDocSession.ts` — load, autosave (900 ms), three-way merge, suggestions for non-owners, IndexedDB draft backup, live remote updates.
 

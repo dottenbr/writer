@@ -54,6 +54,8 @@ export interface Entity {
   summary: string;
   markdown: string;
   group: boolean;
+  /** "section": a "## Name" section (default). "bullet": a "- **Name.** text" line. */
+  form?: "section" | "bullet";
 }
 
 export interface BookModel {
@@ -176,6 +178,22 @@ function firstParagraph(markdown: string): string {
   return para ? markdownToPlain(para).replace(/\s+/g, " ").trim().slice(0, 320) : "";
 }
 
+/** Top-level "- **Name.** text" bullets (with any indented continuation lines). */
+export function bulletEntries(body: string): Array<{ name: string; text: string }> {
+  const out: Array<{ name: string; text: string }> = [];
+  let current: { name: string; text: string } | null = null;
+  for (const line of body.split("\n")) {
+    const m = line.match(/^[-*]\s+\*\*(.+?)\*\*\s*(.*)$/);
+    if (m) {
+      if (current) out.push(current);
+      current = { name: m[1].replace(/[.:]\s*$/, "").trim(), text: m[2].replace(/^[.:]\s*/, "") };
+    } else if (current && /^\s+\S/.test(line)) current.text += "\n" + line;
+    else if (current) { out.push(current); current = null; }
+  }
+  if (current) out.push(current);
+  return out.filter(b => b.name);
+}
+
 export function extractEntities(files: SourceFile[]): Entity[] {
   const entities: Entity[] = [];
   for (const file of files) {
@@ -184,7 +202,15 @@ export function extractEntities(files: SourceFile[]): Entity[] {
     const kind = KIND_BY_FILE.find(([re]) => re.test(base))?.[1];
     if (!kind) continue;
     const { body } = splitDocument(file.content);
-    for (const s of sections(body, 2)) {
+    const parts = sections(body, 2);
+    // Pages written as a list of bold-named bullets ("- **Counting.** …") are entries too.
+    if (!parts.length) {
+      for (const b of bulletEntries(body)) {
+        entities.push({ id: file.path + "#" + slugify(b.name), name: b.name, kind, path: file.path, slug: slugify(b.name), aliases: [], summary: markdownToPlain(b.text).replace(/\s+/g, " ").trim().slice(0, 320), markdown: b.text, group: false, form: "bullet" });
+      }
+      continue;
+    }
+    for (const s of parts) {
       const name = s.heading.replace(/[*_`]/g, "");
       const words = name.split(/\s+/);
       const group = /^(minor|other|real|more|also|groups?|background|named)\b/i.test(name) || (words.length > 2 && words.slice(1).every(w => !/^\p{Lu}/u.test(w)) && !/^\p{Lu}/u.test(words[1] ?? ""));

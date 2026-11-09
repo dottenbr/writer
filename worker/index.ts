@@ -41,8 +41,23 @@ async function included(body:any,env:Env,headers:Record<string,string>,signal:Ab
 }
 
 const esc=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-/** Space an 8-digit code as "1234 5678" so it is easy to read and type. */
-export const spacedCode=(code:string)=>code.length>=8?code.slice(0,code.length/2)+' '+code.slice(code.length/2):code;
+/** Show a code in two halves, "123 456", so it is easy to read and type. */
+export const spacedCode=(code:string)=>code.length>=6&&code.length%2===0?code.slice(0,code.length/2)+' '+code.slice(code.length/2):code;
+
+/** Bookkit's own sign-in codes: 6 digits, 15 minutes, 5 tries. */
+export const CODE_MINUTES=15, CODE_TRIES=5;
+const sha256=async(text:string)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const codeHash=(code:string,userId:string,secret:string)=>sha256(`${secret.slice(0,16)}:${userId}:${code}`);
+function newCode():string{const n=crypto.getRandomValues(new Uint32Array(1))[0]%1000000;return String(n).padStart(6,'0');}
+/** Store a fresh code for this account that unlocks the given Supabase token. */
+async function issueCode(env:Env,userId:string,tokenHash:string,tokenType:'magiclink'|'invite',signal:AbortSignal):Promise<string>{
+ const code=newCode();
+ const admin={apikey:env.SUPABASE_SECRET_KEY!,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'};
+ const res=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?on_conflict=user_id`,{method:'POST',headers:admin,signal,body:JSON.stringify({user_id:userId,code_hash:await codeHash(code,userId,env.SUPABASE_SECRET_KEY!),token_hash:tokenHash,token_type:tokenType,expires_at:new Date(Date.now()+CODE_MINUTES*60000).toISOString(),attempts:0,created_at:new Date().toISOString()})});
+ if(!res.ok)throw new Error('Could not store the sign-in code.');
+ return code;
+}
+const signInUrl=(origin:string,email:string,code:string)=>`${origin}/sign-in?email=${encodeURIComponent(email)}&code=${code}`;
 /**
  * A Bookkit-branded transactional email: wordmark, a short message, an
  * optional one-time code and an optional button. Always plain HTML tables
@@ -94,22 +109,25 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
  if(!res.ok)res=await generate('magiclink');
  const data:any=await res.json().catch(()=>null);
  const link=data?.action_link??data?.properties?.action_link;
- const code=data?.email_otp??data?.properties?.email_otp;
  if(!res.ok||typeof link!=='string')return json({error:'Could not create a sign-in link. Try again.'},502);
  if(body?.send!==true)return json({link});
  if(!env.EMAIL)return json({error:'Email sending is not configured on this server. Copy the link instead.',link},503);
  const book=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=name&id=eq.${projectId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]);
  const title=String(book?.[0]?.name??'a book').slice(0,200);
  const inviter=String(user?.user_metadata?.display_name||user?.email||'The author').slice(0,120);
- const hasCode=typeof code==='string'&&/^\d{6,10}$/.test(code);
+ const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
+ const invitee=data?.id??data?.user?.id;
+ const tokenType=(data?.verification_type??data?.properties?.verification_type)==='invite'?'invite':'magiclink';
+ const code=typeof tokenHash==='string'&&typeof invitee==='string'?await issueCode(env,invitee,tokenHash,tokenType,signal).catch(()=>null):null;
+ const hasCode=!!code;
  const mail=bookkitEmail({
   origin:url.origin,
   preheader:`${inviter} invited you to work on ${title}.`,
   lines:[`<strong>${esc(inviter)}</strong> invited you to work on <strong>${esc(title)}</strong> in Bookkit.`],
-  button:{label:'Open the book',url:link},
+  button:{label:'Open the book',url:hasCode?signInUrl(url.origin,email,code!):link},
   codeLead:hasCode?`Or go to ${esc(url.host)}, choose <em>I have a code</em>, and enter this email address with the code:`:undefined,
-  code:hasCode?code:undefined,
-  codeNote:hasCode?`The button and the code work once and expire after an hour. If they expire, ask ${esc(inviter)} to send the invitation again.`:undefined,
+  code:hasCode?code!:undefined,
+  codeNote:hasCode?`The button and the code work once and expire after ${CODE_MINUTES} minutes. If they expire, use <em>Email me a sign-in code</em> on the sign-in page.`:undefined,
   footnote:'You can set a password later from the account menu. If you weren’t expecting this invitation, you can ignore it.',
  });
  const sent=await env.EMAIL.send({
@@ -123,10 +141,10 @@ async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
 }
 
 /**
- * "Email me a code" for existing accounts, sent by Bookkit. The answer never
- * reveals whether an account exists, no account is created, and each account
- * gets at most one code a minute. The code signs in through
- * supabase.auth.verifyOtp({type:'email'}).
+ * "Email me a sign-in code" for existing accounts, sent by Bookkit. The
+ * answer never reveals whether an account exists, no account is created, and
+ * each account gets at most one code a minute. The email has the 6-digit
+ * code and a link that carries the same code.
  */
 async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  if(request.method!=='POST')return json({error:'POST required'},405);
@@ -147,15 +165,17 @@ async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{...user.app_metadata,bookkit_link_sent_at:Date.now()}}),signal});
  const res=await fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type:'magiclink',email,redirect_to:url.origin+'/'}),signal});
  const data:any=await res.json().catch(()=>null);
- const code=data?.email_otp??data?.properties?.email_otp;
- if(!res.ok||typeof code!=='string'||!/^\d{6,10}$/.test(code))return done;
+ const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
+ if(!res.ok||typeof tokenHash!=='string')return done;
+ const code=await issueCode(env,id,tokenHash,'magiclink',signal);
  const mail=bookkitEmail({
   origin:url.origin,
-  preheader:`Your code is ${spacedCode(code)}. It expires in an hour.`,
-  lines:['Here’s your code for signing in to Bookkit. Type it on the sign-in screen:'],
+  preheader:`Your code is ${spacedCode(code)}. It expires in ${CODE_MINUTES} minutes.`,
+  lines:['Here’s your code for signing in to Bookkit:'],
   code,
-  codeNote:'It works once and expires in an hour. Forgot your password? After signing in, choose <em>Set password</em> in the account menu.',
-  footnote:'You’re getting this because someone asked to sign in to Bookkit with this email address. If it wasn’t you, ignore this email; nobody can sign in without the code.',
+  codeNote:`Type it on the sign-in screen, or use the button below. It works once and expires in ${CODE_MINUTES} minutes.`,
+  button:{label:'Sign in to Bookkit',url:signInUrl(url.origin,email,code)},
+  footnote:'You’re getting this because someone asked to sign in to Bookkit with this email address. If it wasn’t you, ignore this email; nobody can sign in without the code. Forgot your password? After signing in, choose Set password in the account menu.',
  });
  await env.EMAIL.send({
   to:email,
@@ -166,9 +186,42 @@ async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
  return done;
 }
 
+/**
+ * Exchange a Bookkit sign-in code for a session. Wrong codes count against
+ * the code (5 tries), and an expired or used code is gone.
+ */
+async function signInVerify(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.SUPABASE_SECRET_KEY)return json({error:'Code sign-in is not available. Use your password.'},503);
+ const body:any=await limitedBody(request).catch(()=>null);
+ const email=String(body?.email??'').trim().toLowerCase();
+ const code=String(body?.code??'').replace(/\D/g,'');
+ const wrong=json({error:'That code is wrong or has expired. Check the latest email, or send a new code.'},400);
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||code.length!==6)return wrong;
+ const signal=AbortSignal.timeout(20000);
+ const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+ const found:any=await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&email=eq.${encodeURIComponent(email)}`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const id=found?.[0]?.id;if(!id)return wrong;
+ const rows:any=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}&select=*`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const row=rows?.[0];if(!row)return wrong;
+ const remove=()=>fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}`,{method:'DELETE',headers:admin,signal});
+ if(Date.parse(row.expires_at)<Date.now()||row.attempts>=CODE_TRIES){await remove();return wrong;}
+ if(await codeHash(code,id,env.SUPABASE_SECRET_KEY)!==row.code_hash){
+  await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}`,{method:'PATCH',headers:admin,signal,body:JSON.stringify({attempts:row.attempts+1})});
+  return wrong;
+ }
+ await remove();
+ const res=await fetch(`${env.SUPABASE_URL}/auth/v1/verify`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({type:row.token_type,token_hash:row.token_hash})});
+ const session:any=await res.json().catch(()=>null);
+ if(!res.ok||!session?.access_token||!session?.refresh_token)return wrong;
+ return json({access_token:session.access_token,refresh_token:session.refresh_token});
+}
+
 export default {async fetch(request:Request,env:Env):Promise<Response>{
  const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(url.pathname==='/api/sign-in-code'||url.pathname==='/api/sign-in-link')return signInCode(request,env,url).catch(()=>json({ok:true}));
+ if(url.pathname==='/api/sign-in-verify')return signInVerify(request,env,url).catch(()=>json({error:'Could not sign in with that code. Try again.'},502));
  if(url.pathname==='/api/invite-link')return inviteLink(request,env,url).catch(()=>json({error:'Could not create a sign-in link. Try again.'},502));
  if(url.pathname!=='/api/ai')return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST required'},405);

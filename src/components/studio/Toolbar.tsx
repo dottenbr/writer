@@ -31,8 +31,11 @@ export function Toolbar() {
   const { suggesting } = useAccess();
   const [, rerender] = useReducer(x => x + 1, 0);
   const [size, setSizeState] = useState<number>(() => prefs().proseSize ?? 18);
+  const [proseFont, setProseFontState] = useState<string>(() => prefs().proseFont ?? "serif");
   const setSize = (n: number) => { const v = Math.max(14, Math.min(24, n)); setSizeState(v); writePrefs({ proseSize: v }); };
+  const setProseFont = (f: string) => { setProseFontState(f); writePrefs({ proseFont: f }); };
   useEffect(() => { document.documentElement.style.setProperty("--prose-size", `${size}px`); }, [size]);
+  useEffect(() => { document.documentElement.dataset.proseFont = proseFont; }, [proseFont]);
 
   useEffect(() => {
     if (!editor) return;
@@ -96,7 +99,18 @@ export function Toolbar() {
       <div className="tb-spacer" />
       {suggesting && <span className="mode-pill" title="Your edits are saved as suggestions for the author to accept or reject">Suggesting</span>}
       {saveLabel && <span className={`save-state ${readOnly ? "readonly" : state}`} aria-live="polite" title={session?.error || undefined}>{readOnly ? null : state === "saving" ? <span className="spinner tiny" /> : state === "error" ? "!" : <Icon name="check" size={13} />} {saveLabel}</span>}
-      <div className="tb-size" role="group" aria-label="Text size">
+      <div className="tb-size" role="group" aria-label="Reading comfort">
+        <select
+          className="tb-font-select"
+          aria-label="Reading font"
+          title="Reading font comfort"
+          value={proseFont}
+          onChange={e => setProseFont(e.target.value)}
+        >
+          <option value="serif">Serif</option>
+          <option value="sans">Sans</option>
+          <option value="dyslexic">Accessible spacing</option>
+        </select>
         <button className="tb-size-btn" onMouseDown={e => e.preventDefault()} onClick={() => setSize(size - 1)} disabled={size <= 14} aria-label="Smaller text">A−</button>
         <span className="tb-size-val">{size}</span>
         <button className="tb-size-btn" onMouseDown={e => e.preventDefault()} onClick={() => setSize(size + 1)} disabled={size >= 24} aria-label="Larger text">A+</button>

@@ -2,9 +2,13 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useProjectStore } from "../store/useProjectStore";
 import { getInspirationUrl } from "../lib/supabase-service";
 import type { InspirationItem } from "../types";
+import { Icon } from "./studio/common";
 
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif"]);
 const PDF_EXTENSIONS = new Set(["pdf"]);
+const DOCUMENT_EXTENSIONS = new Set(["pdf", "epub", "doc", "docx", "txt", "rtf", "odt", "mobi"]);
+
+type FileTypeFilter = "all" | "images" | "documents" | "other";
 
 function fileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
@@ -18,23 +22,30 @@ function isPdf(fileName: string): boolean {
   return PDF_EXTENSIONS.has(fileExtension(fileName));
 }
 
-function bytesToBlob(bytes: Uint8Array, mime: string): Blob {
-  return new Blob([new Uint8Array(bytes) as BlobPart], { type: mime });
+function fileTypeCategory(fileName: string): FileTypeFilter {
+  if (isImage(fileName)) return "images";
+  if (DOCUMENT_EXTENSIONS.has(fileExtension(fileName))) return "documents";
+  return "other";
 }
 
-function mimeFromExtension(ext: string): string {
-  const map: Record<string, string> = {
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    gif: "image/gif",
-    webp: "image/webp",
-    bmp: "image/bmp",
-    svg: "image/svg+xml",
-    avif: "image/avif",
-    pdf: "application/pdf",
-  };
-  return map[ext] ?? "application/octet-stream";
+function matchesSearch(item: InspirationItem, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (
+    item.label.toLowerCase().includes(q) ||
+    item.fileName.toLowerCase().includes(q) ||
+    item.notes.toLowerCase().includes(q) ||
+    item.tags.some((t) => t.toLowerCase().includes(q))
+  );
+}
+
+function deduplicateFileName(name: string, existing: Set<string>): string {
+  if (!existing.has(name)) return name;
+  const ext = name.includes(".") ? "." + name.split(".").pop() : "";
+  const base = ext ? name.slice(0, -ext.length) : name;
+  let i = 2;
+  while (existing.has(`${base}-${i}${ext}`)) i++;
+  return `${base}-${i}${ext}`;
 }
 
 function useThumbnail(projectId: string, item: InspirationItem) {
@@ -56,39 +67,42 @@ function useThumbnail(projectId: string, item: InspirationItem) {
   return url;
 }
 
-function FileTypeIcon({ fileName }: { fileName: string }) {
-  if (isPdf(fileName)) {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="insp-type-icon">
-        <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-        <text x="8" y="18" fontSize="6" fontWeight="700" fill="currentColor" stroke="none" fontFamily="system-ui">PDF</text>
-      </svg>
-    );
-  }
+function FileTypeBadge({ fileName }: { fileName: string }) {
+  const ext = fileExtension(fileName).toUpperCase() || "FILE";
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="insp-type-icon">
-      <path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-    </svg>
+    <div className="insp-file-badge">
+      <Icon name={isPdf(fileName) ? "book" : "file"} size={24} />
+      <span>{ext}</span>
+    </div>
   );
 }
 
 function InspirationCard({
   item,
   projectId,
+  canEdit,
   onDelete,
   onUpdate,
   onPreview,
+  onAddTag,
+  onRemoveTag,
 }: {
   item: InspirationItem;
   projectId: string;
+  canEdit: boolean;
   onDelete: (id: string) => void;
   onUpdate: (id: string, updates: Partial<InspirationItem>) => void;
   onPreview: (item: InspirationItem) => void;
+  onAddTag: (id: string, tag: string) => void;
+  onRemoveTag: (id: string, tag: string) => void;
 }) {
   const thumb = useThumbnail(projectId, item);
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(item.label);
-  const [showNotes, setShowNotes] = useState(false);
+  const [showNotes, setShowNotes] = useState(Boolean(item.notes));
+  const [addingTag, setAddingTag] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const commitLabel = () => {
     const trimmed = labelDraft.trim();
@@ -98,102 +112,120 @@ function InspirationCard({
     setEditingLabel(false);
   };
 
+  const commitTag = () => {
+    if (tagDraft.trim()) onAddTag(item.id, tagDraft);
+    setTagDraft("");
+    setAddingTag(false);
+  };
+
   return (
-    <div className="insp-card">
-      <div className="insp-card-preview" onClick={() => onPreview(item)}>
+    <article className="insp-studio-card">
+      <button type="button" className="insp-studio-preview" onClick={() => onPreview(item)} aria-label={`Preview ${item.label}`}>
         {thumb ? (
-          <img src={thumb} alt={item.label} className="insp-card-img" />
+          <img src={thumb} alt={item.label} className="insp-studio-img" loading="lazy" />
         ) : (
-          <div className="insp-card-icon">
-            <FileTypeIcon fileName={item.fileName} />
-            <span className="insp-card-ext">{fileExtension(item.fileName).toUpperCase()}</span>
-          </div>
+          <FileTypeBadge fileName={item.fileName} />
         )}
-      </div>
-      <div className="insp-card-body">
-        {editingLabel ? (
-          <input
-            className="form-input insp-label-input"
-            value={labelDraft}
-            onChange={(e) => setLabelDraft(e.target.value)}
-            onBlur={commitLabel}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitLabel();
-              if (e.key === "Escape") setEditingLabel(false);
-            }}
-            autoFocus
-          />
-        ) : (
-          <div
-            className="insp-card-label"
-            onDoubleClick={() => {
-              setLabelDraft(item.label);
-              setEditingLabel(true);
-            }}
-            title="Double-click to rename"
-          >
-            {item.label}
-          </div>
-        )}
-        <div className="insp-card-meta">{item.fileName}</div>
-        {item.tags.length > 0 && (
-          <div className="insp-card-tags">
-            {item.tags.map((tag) => (
-              <span key={tag} className="insp-tag">{tag}</span>
-            ))}
-          </div>
-        )}
+      </button>
+      <div className="insp-studio-body">
+        <div className="insp-studio-head">
+          {editingLabel && canEdit ? (
+            <input
+              className="insp-studio-title-input"
+              value={labelDraft}
+              aria-label="Item title"
+              onChange={(e) => setLabelDraft(e.target.value)}
+              onBlur={commitLabel}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitLabel();
+                if (e.key === "Escape") setEditingLabel(false);
+              }}
+              autoFocus
+            />
+          ) : (
+            <h3
+              className="insp-studio-title"
+              onClick={() => {
+                if (!canEdit) return;
+                setLabelDraft(item.label);
+                setEditingLabel(true);
+              }}
+              title={canEdit ? "Click to rename" : undefined}
+            >
+              {item.label}
+            </h3>
+          )}
+          <span className="insp-studio-filename">{item.fileName}</span>
+        </div>
+
+        <div className="insp-studio-tags">
+          {item.tags.map((tag) => (
+            <span key={tag} className="chip insp-chip">
+              {tag}
+              {canEdit && (
+                <button
+                  type="button"
+                  className="insp-chip-remove"
+                  aria-label={`Remove tag ${tag}`}
+                  onClick={() => onRemoveTag(item.id, tag)}
+                >
+                  &times;
+                </button>
+              )}
+            </span>
+          ))}
+          {canEdit && (
+            addingTag ? (
+              <input
+                className="insp-tag-inline-input"
+                placeholder="Tag name…"
+                value={tagDraft}
+                onChange={(e) => setTagDraft(e.target.value)}
+                onBlur={commitTag}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitTag();
+                  if (e.key === "Escape") { setTagDraft(""); setAddingTag(false); }
+                }}
+                autoFocus
+              />
+            ) : (
+              <button type="button" className="link-btn insp-add-tag-btn" onClick={() => setAddingTag(true)}>
+                + Tag
+              </button>
+            )
+          )}
+        </div>
+
         {showNotes && (
           <textarea
-            className="form-input insp-notes-input"
-            placeholder="Notes..."
+            className="insp-studio-notes"
+            placeholder="Why this matters to the book…"
             value={item.notes}
+            readOnly={!canEdit}
             onChange={(e) => onUpdate(item.id, { notes: e.target.value })}
-            rows={3}
+            rows={2}
           />
         )}
-        <div className="insp-card-actions">
-          <button
-            className="btn btn-sm"
-            onClick={() => setShowNotes(!showNotes)}
-            title={showNotes ? "Hide notes" : "Add notes"}
-          >
-            {showNotes ? "Hide Notes" : "Notes"}
+
+        <div className="insp-studio-foot">
+          <button type="button" className="link-btn" onClick={() => setShowNotes(!showNotes)}>
+            {showNotes ? "Hide notes" : item.notes ? "Edit notes" : "+ Add notes"}
           </button>
-          <button
-            className="btn btn-sm btn-danger"
-            onClick={() => {
-              if (confirm(`Remove "${item.label}" from inspiration board?`)) {
-                onDelete(item.id);
-              }
-            }}
-          >
-            Remove
-          </button>
+          {canEdit && (
+            confirmDelete ? (
+              <span className="confirm-inline">
+                <button type="button" className="btn btn-sm btn-danger" onClick={() => onDelete(item.id)}>Remove</button>
+                <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Keep</button>
+              </span>
+            ) : (
+              <button type="button" className="link-btn danger" onClick={() => setConfirmDelete(true)}>
+                Remove
+              </button>
+            )
+          )}
         </div>
       </div>
-    </div>
-  );
-}
-
-type FileTypeFilter = "all" | "images" | "documents" | "other";
-
-const DOCUMENT_EXTENSIONS = new Set(["pdf", "epub", "doc", "docx", "txt", "rtf", "odt", "mobi"]);
-
-function fileTypeCategory(fileName: string): FileTypeFilter {
-  if (isImage(fileName)) return "images";
-  if (DOCUMENT_EXTENSIONS.has(fileExtension(fileName))) return "documents";
-  return "other";
-}
-
-function matchesSearch(item: InspirationItem, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return (
-    item.label.toLowerCase().includes(q) ||
-    item.fileName.toLowerCase().includes(q) ||
-    item.notes.toLowerCase().includes(q) ||
-    item.tags.some((t) => t.toLowerCase().includes(q))
+    </article>
   );
 }
 
@@ -239,67 +271,41 @@ function Lightbox({
   }, [onClose, onNavigate, currentIndex, hasPrev, hasNext]);
 
   return (
-    <div className="insp-lightbox" onClick={onClose}>
-      <div className="insp-lightbox-content" onClick={(e) => e.stopPropagation()}>
-        {!url ? (
-          <div className="insp-lightbox-loading">Loading...</div>
-        ) : isImage(item.fileName) ? (
-          <img src={url} alt={item.label} className="insp-lightbox-img" />
-        ) : isPdf(item.fileName) ? (
-          <iframe src={url} title={item.label} className="insp-lightbox-pdf" />
-        ) : (
-          <div className="insp-lightbox-fallback">
-            <FileTypeIcon fileName={item.fileName} />
-            <p>{item.fileName}</p>
+    <div className="dialog-backdrop insp-lightbox-backdrop" onMouseDown={onClose}>
+      <div className="insp-lightbox-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="insp-lightbox-bar">
+          <div>
+            <strong>{item.label}</strong>
+            <span className="muted"> · {item.fileName} ({currentIndex + 1} of {items.length})</span>
           </div>
-        )}
-
-        {hasPrev && (
-          <button
-            className="insp-lightbox-nav insp-lightbox-prev"
-            onClick={() => onNavigate(currentIndex - 1)}
-            title="Previous (Left arrow)"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="24" height="24">
-              <path d="M15.75 19.5L8.25 12l7.5-7.5" />
-            </svg>
-          </button>
-        )}
-        {hasNext && (
-          <button
-            className="insp-lightbox-nav insp-lightbox-next"
-            onClick={() => onNavigate(currentIndex + 1)}
-            title="Next (Right arrow)"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="24" height="24">
-              <path d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
-          </button>
-        )}
-
-        <button className="insp-lightbox-close" onClick={onClose}>
-          &times;
-        </button>
-        <div className="insp-lightbox-footer">
-          <span className="insp-lightbox-label">{item.label}</span>
-          <span className="insp-lightbox-counter">{currentIndex + 1} / {items.length}</span>
+          <div className="insp-lightbox-actions">
+            {hasPrev && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex - 1)}>Previous</button>}
+            {hasNext && <button type="button" className="btn btn-sm" onClick={() => onNavigate(currentIndex + 1)}>Next</button>}
+            {url && <a className="btn btn-sm" href={url} target="_blank" rel="noopener noreferrer">Open original</a>}
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close preview"><Icon name="close" size={16} /></button>
+          </div>
+        </header>
+        <div className="insp-lightbox-stage">
+          {!url ? (
+            <div className="studio-message"><span className="spinner" /> Loading preview…</div>
+          ) : isImage(item.fileName) ? (
+            <img src={url} alt={item.label} className="insp-lightbox-img" />
+          ) : isPdf(item.fileName) ? (
+            <iframe src={url} title={item.label} className="insp-lightbox-pdf" />
+          ) : (
+            <div className="insp-lightbox-fallback">
+              <FileTypeBadge fileName={item.fileName} />
+              <p>{item.fileName}</p>
+            </div>
+          )}
         </div>
+        {item.notes && <footer className="insp-lightbox-notes">{item.notes}</footer>}
       </div>
     </div>
   );
 }
 
-function deduplicateFileName(name: string, existing: Set<string>): string {
-  if (!existing.has(name)) return name;
-  const ext = name.includes(".") ? "." + name.split(".").pop() : "";
-  const base = ext ? name.slice(0, -ext.length) : name;
-  let i = 2;
-  while (existing.has(`${base}-${i}${ext}`)) i++;
-  return `${base}-${i}${ext}`;
-}
-
 export function Inspiration() {
-  const project = useProjectStore((s) => s.currentProject());
   const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const inspirationItems = useProjectStore((s) => s.inspirationItems);
   const addInspirationFiles = useProjectStore((s) => s.addInspirationFiles);
@@ -314,7 +320,7 @@ export function Inspiration() {
   const [filterType, setFilterType] = useState<FileTypeFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [isDragging, setIsDragging] = useState(false);
-  const [tagInput, setTagInput] = useState<{ itemId: string; value: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const allTags = Array.from(new Set(inspirationItems.flatMap((i) => i.tags))).sort();
@@ -327,22 +333,26 @@ export function Inspiration() {
   });
 
   const existingFileNames = new Set(inspirationItems.map((i) => i.fileName));
-
   const hasActiveFilters = filterTag !== null || filterType !== "all" || searchQuery !== "";
 
   const handleAddViaInput = useCallback(
     async (fileList: FileList) => {
-      const files: { sourcePath: string; fileName: string; data: Uint8Array }[] = [];
-      for (let i = 0; i < fileList.length; i++) {
-        const file = fileList[i];
-        const raw = file.name;
-        const fileName = deduplicateFileName(raw, existingFileNames);
-        existingFileNames.add(fileName);
-        const buffer = await file.arrayBuffer();
-        files.push({ sourcePath: "", fileName, data: new Uint8Array(buffer) });
-      }
-      if (files.length > 0 && canEdit) {
-        await addInspirationFiles(files);
+      if (!canEdit || fileList.length === 0) return;
+      setUploading(true);
+      try {
+        const files: { sourcePath: string; fileName: string; data: Uint8Array }[] = [];
+        for (let i = 0; i < fileList.length; i++) {
+          const file = fileList[i];
+          const fileName = deduplicateFileName(file.name, existingFileNames);
+          existingFileNames.add(fileName);
+          const buffer = await file.arrayBuffer();
+          files.push({ sourcePath: "", fileName, data: new Uint8Array(buffer) });
+        }
+        if (files.length > 0) {
+          await addInspirationFiles(files);
+        }
+      } finally {
+        setUploading(false);
       }
     },
     [addInspirationFiles, canEdit, existingFileNames]
@@ -359,10 +369,13 @@ export function Inspiration() {
     [canEdit, handleAddViaInput]
   );
 
-  const handlePreview = useCallback(async (item: InspirationItem) => {
-    const idx = displayed.findIndex((d) => d.id === item.id);
-    setPreviewIndex(idx >= 0 ? idx : 0);
-  }, [displayed]);
+  const handlePreview = useCallback(
+    (item: InspirationItem) => {
+      const idx = displayed.findIndex((d) => d.id === item.id);
+      setPreviewIndex(idx >= 0 ? idx : 0);
+    },
+    [displayed]
+  );
 
   const handleAddTag = (itemId: string, tag: string) => {
     const trimmed = tag.trim().toLowerCase();
@@ -379,23 +392,24 @@ export function Inspiration() {
   };
 
   return (
-    <div className="content">
-      <div className="content-wide">
-        <div className="page-title">Inspiration</div>
-        {!canEdit && (
-          <div className="card" style={{ marginBottom: 16, padding: 12 }}>
-            View-only mode. You can browse inspiration files, but only editors can change the board.
-          </div>
-        )}
-
-        <div className="insp-toolbar">
-          <button
-            className="btn btn-primary"
-            disabled={!canEdit}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            + Add Files
-          </button>
+    <div
+      className={`board insp-board ${isDragging ? "dragging" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (canEdit) setIsDragging(true);
+      }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={handleDrop}
+    >
+      <header className="board-head">
+        <div>
+          <div className="board-eyebrow">Reference &amp; Mood Board</div>
+          <h1>Inspiration</h1>
+          <p className="board-sub">
+            Photographs, maps, clippings, and reference PDFs that belong to the world of this book.
+          </p>
+        </div>
+        <div className="insp-head-actions">
           <input
             ref={fileInputRef}
             type="file"
@@ -404,163 +418,141 @@ export function Inspiration() {
             style={{ display: "none" }}
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                if (canEdit) void handleAddViaInput(e.target.files);
+                void handleAddViaInput(e.target.files);
                 e.target.value = "";
               }
             }}
           />
-
-          <div className="insp-search-wrap">
-            <svg viewBox="0 0 20 20" fill="currentColor" className="insp-search-icon">
-              <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" clipRule="evenodd" />
-            </svg>
-            <input
-              className="insp-search"
-              type="text"
-              placeholder="Search files..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button className="insp-search-clear" onClick={() => setSearchQuery("")}>&times;</button>
-            )}
-          </div>
-
-          <div className="insp-type-filters">
-            {(["all", "images", "documents", "other"] as FileTypeFilter[]).map((t) => (
-              <button
-                key={t}
-                className={`insp-tag-filter ${filterType === t ? "active" : ""}`}
-                onClick={() => setFilterType(filterType === t ? "all" : t)}
-              >
-                {t === "all" ? "All Types" : t.charAt(0).toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          {allTags.length > 0 && (
-            <div className="insp-filter-tags">
-              <button
-                className={`insp-tag-filter ${filterTag === null ? "active" : ""}`}
-                onClick={() => setFilterTag(null)}
-              >
-                All Tags
-              </button>
-              {allTags.map((tag) => (
-                <button
-                  key={tag}
-                  className={`insp-tag-filter ${filterTag === tag ? "active" : ""}`}
-                  onClick={() => setFilterTag(filterTag === tag ? null : tag)}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <span className="text-muted" style={{ marginLeft: "auto", fontSize: "0.82rem" }}>
-            {hasActiveFilters
-              ? `${displayed.length} of ${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`
-              : `${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`}
-          </span>
-        </div>
-
-        <div
-          className={`insp-drop-zone ${isDragging ? "dragging" : ""}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!canEdit) return;
-            setIsDragging(true);
-          }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-        >
-          {displayed.length === 0 ? (
-            <div className="insp-empty">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" className="insp-empty-icon">
-                <path d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21zm7.5-12.75a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-              </svg>
-              <p className="insp-empty-title">Your mood board is empty</p>
-              <p className="insp-empty-text">
-                Drop images, PDFs, ebooks, or other reference files here, or click "Add Files" above.
-              </p>
-            </div>
-          ) : (
-            <div className="insp-grid">
-              {displayed.map((item) => (
-                <div key={item.id} className="insp-grid-item">
-                  <InspirationCard
-                    item={item}
-                    projectId={projectId}
-                    onDelete={(id) => {
-                      if (!canEdit) return;
-                      void removeInspirationItem(id);
-                    }}
-                    onUpdate={(id, updates) => {
-                      if (!canEdit) return;
-                      updateInspirationItem(id, updates);
-                    }}
-                    onPreview={handlePreview}
-                  />
-                  <div className="insp-card-tag-row">
-                    {item.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="insp-tag removable"
-                        onClick={() => {
-                          if (!canEdit) return;
-                          handleRemoveTag(item.id, tag);
-                        }}
-                      >
-                        {tag} &times;
-                      </span>
-                    ))}
-                    {tagInput?.itemId === item.id ? (
-                      <input
-                        className="insp-tag-input"
-                        placeholder="tag..."
-                        value={tagInput.value}
-                        onChange={(e) => setTagInput({ itemId: item.id, value: e.target.value })}
-                        onBlur={() => {
-                          if (canEdit) handleAddTag(item.id, tagInput.value);
-                          setTagInput(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            if (canEdit) handleAddTag(item.id, tagInput.value);
-                            setTagInput({ itemId: item.id, value: "" });
-                          }
-                          if (e.key === "Escape") setTagInput(null);
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <button
-                        className="insp-tag-add"
-                        disabled={!canEdit}
-                        onClick={() => setTagInput({ itemId: item.id, value: "" })}
-                        title="Add tag"
-                      >
-                        +
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+          {canEdit && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Icon name="plus" size={14} /> {uploading ? "Uploading…" : "Add files"}
+            </button>
           )}
         </div>
+      </header>
 
-        {previewIndex !== null && displayed[previewIndex] && (
-          <Lightbox
-            items={displayed}
-            currentIndex={previewIndex}
-            projectId={projectId}
-            onClose={() => setPreviewIndex(null)}
-            onNavigate={setPreviewIndex}
+      <div className="insp-controls">
+        <div className="insp-search-box">
+          <Icon name="search" size={14} />
+          <input
+            type="search"
+            placeholder="Filter by title, filename, tag, or notes…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search inspiration files"
           />
-        )}
+          {searchQuery && (
+            <button type="button" className="icon-btn" onClick={() => setSearchQuery("")} aria-label="Clear search">
+              <Icon name="close" size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="segmented" role="group" aria-label="Filter by file type">
+          {(["all", "images", "documents", "other"] as FileTypeFilter[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={filterType === t ? "on" : ""}
+              onClick={() => setFilterType(t)}
+            >
+              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        <span className="muted insp-count">
+          {hasActiveFilters
+            ? `${displayed.length} of ${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`
+            : `${inspirationItems.length} item${inspirationItems.length !== 1 ? "s" : ""}`}
+        </span>
       </div>
+
+      {allTags.length > 0 && (
+        <div className="insp-tag-bar" role="group" aria-label="Filter by tag">
+          <button
+            type="button"
+            className={`chip ${filterTag === null ? "on" : ""}`}
+            onClick={() => setFilterTag(null)}
+          >
+            All tags
+          </button>
+          {allTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={`chip ${filterTag === tag ? "on" : ""}`}
+              onClick={() => setFilterTag(filterTag === tag ? null : tag)}
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {displayed.length === 0 ? (
+        <div className="insp-empty-card">
+          <div className="insp-empty-icon-wrap">
+            <Icon name="sparkle" size={24} />
+          </div>
+          <h2>{hasActiveFilters ? "No matching reference files" : "Your mood board is empty"}</h2>
+          <p className="muted">
+            {hasActiveFilters
+              ? "Try clearing the search or tag filter to see everything in this book."
+              : canEdit
+              ? "Drop photographs, maps, PDFs, or research clippings anywhere on this page, or click Add files."
+              : "No reference files have been added to this book yet."}
+          </p>
+          {hasActiveFilters ? (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setFilterTag(null);
+                setFilterType("all");
+                setSearchQuery("");
+              }}
+            >
+              Reset filters
+            </button>
+          ) : canEdit ? (
+            <button type="button" className="btn" onClick={() => fileInputRef.current?.click()}>
+              <Icon name="plus" size={14} /> Choose files to upload
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="insp-studio-grid">
+          {displayed.map((item) => (
+            <InspirationCard
+              key={item.id}
+              item={item}
+              projectId={projectId}
+              canEdit={canEdit}
+              onDelete={(id) => void removeInspirationItem(id)}
+              onUpdate={(id, updates) => updateInspirationItem(id, updates)}
+              onPreview={handlePreview}
+              onAddTag={handleAddTag}
+              onRemoveTag={handleRemoveTag}
+            />
+          ))}
+        </div>
+      )}
+
+      {previewIndex !== null && displayed[previewIndex] && (
+        <Lightbox
+          items={displayed}
+          currentIndex={previewIndex}
+          projectId={projectId}
+          onClose={() => setPreviewIndex(null)}
+          onNavigate={setPreviewIndex}
+        />
+      )}
     </div>
   );
 }

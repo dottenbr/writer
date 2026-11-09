@@ -28,18 +28,35 @@ function ago(when: string | null): string {
 /** Sequential steps of the accent hue for activity; 0 is the empty cell. */
 const level = (n: number, max: number) => (n <= 0 ? 0 : Math.min(4, Math.ceil((n / Math.max(1, max)) * 4)));
 
-interface DayTotal { day: string; edits: number; words: number; books: string[] }
+interface DayTotal { day: string; added: number; removed: number; chapters: number; pages: number; comments: number; suggestions: number; score: number; books: string[] }
+
+/** How much happened on a day: words written count most; edits and conversations count too. Saves don't. */
+const scoreOf = (d: Omit<DayTotal, "score" | "books" | "day">) => d.added + d.removed / 2 + 40 * (d.comments + d.suggestions) + 25 * (d.chapters + d.pages);
+
+/** "+312 words · 2 chapters · 3 comments" */
+function describeDay(d: DayTotal): string {
+  const parts = [
+    d.added || d.removed ? `${d.added ? `+${d.added.toLocaleString()}` : ""}${d.added && d.removed ? " / " : ""}${d.removed ? `−${d.removed.toLocaleString()}` : ""} words` : "",
+    d.chapters ? `${d.chapters} chapter${d.chapters === 1 ? "" : "s"} revised` : "",
+    d.pages ? `${d.pages} page${d.pages === 1 ? "" : "s"} edited` : "",
+    d.comments ? `${d.comments} comment${d.comments === 1 ? "" : "s"}` : "",
+    d.suggestions ? `${d.suggestions} suggestion${d.suggestions === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || "Nothing written";
+}
 
 function useDays(books: WorkspaceBook[], days: number): DayTotal[] {
   return useMemo(() => {
     const map = new Map<string, DayTotal>();
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
-    for (let i = days - 1; i >= 0; i--) { const d = iso(new Date(today.getTime() - i * DAY)); map.set(d, { day: d, edits: 0, words: 0, books: [] }); }
+    for (let i = days - 1; i >= 0; i--) { const d = iso(new Date(today.getTime() - i * DAY)); map.set(d, { day: d, added: 0, removed: 0, chapters: 0, pages: 0, comments: 0, suggestions: 0, score: 0, books: [] }); }
     for (const b of books) for (const a of b.activity) {
       const t = map.get(a.day);
       if (!t) continue;
-      t.edits += a.edits; t.words += a.words; if (a.edits) t.books.push(b.name);
+      t.added += a.added; t.removed += a.removed; t.chapters += a.chapters; t.pages += a.pages; t.comments += a.comments; t.suggestions += a.suggestions;
+      if (scoreOf(a)) t.books.push(b.name);
     }
+    for (const t of map.values()) t.score = scoreOf(t);
     return [...map.values()];
   }, [books, days]);
 }
@@ -47,7 +64,7 @@ function useDays(books: WorkspaceBook[], days: number): DayTotal[] {
 /** Twelve weeks of work across every book, one cell per day. */
 function ActivityCalendar({ days }: { days: DayTotal[] }) {
   const [hover, setHover] = useState<{ d: DayTotal; x: number; y: number } | null>(null);
-  const max = Math.max(...days.map(d => d.edits), 1);
+  const max = Math.max(...days.map(d => d.score), 1);
   // Pad the start so columns are weeks starting on Monday.
   const first = new Date(days[0].day + "T00:00:00Z");
   const pad = (first.getUTCDay() + 6) % 7;
@@ -69,7 +86,7 @@ function ActivityCalendar({ days }: { days: DayTotal[] }) {
           <div key={i} className="ws-cal-week">
             <div className="ws-cal-month" aria-hidden>{months[i]}</div>
             {w.map((d, j) => d ? (
-              <span key={j} className={`ws-cell l${level(d.edits, max)}`}
+              <span key={j} className={`ws-cell l${level(d.score, max)}`}
                 onMouseEnter={e => { const r = (e.target as HTMLElement).getBoundingClientRect(); setHover({ d, x: r.left + r.width / 2, y: r.top }); }} />
             ) : <span key={j} className="ws-cell blank" />)}
           </div>
@@ -79,7 +96,7 @@ function ActivityCalendar({ days }: { days: DayTotal[] }) {
       {hover && (
         <div className="ws-tip" style={{ left: hover.x, top: hover.y }}>
           <strong>{new Date(hover.d.day + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}</strong>
-          <span>{hover.d.edits ? `${hover.d.edits} save${hover.d.edits === 1 ? "" : "s"}` : "No writing"}{hover.d.words ? ` · ${hover.d.words > 0 ? "+" : ""}${hover.d.words.toLocaleString()} words` : ""}</span>
+          <span>{describeDay(hover.d)}</span>
           {hover.d.books.length > 0 && <span className="muted">{[...new Set(hover.d.books)].join(", ")}</span>}
         </div>
       )}
@@ -90,12 +107,12 @@ function ActivityCalendar({ days }: { days: DayTotal[] }) {
 /** The last 30 days of one book as small bars. */
 function Spark({ book }: { book: WorkspaceBook }) {
   const days = useDays([book], 30);
-  const max = Math.max(...days.map(d => d.edits), 1);
+  const max = Math.max(...days.map(d => d.score), 1);
   return (
-    <div className="ws-spark" aria-label={`Activity in the last 30 days: ${days.filter(d => d.edits).length} active days`}>
+    <div className="ws-spark" aria-label={`Activity in the last 30 days: ${days.filter(d => d.score).length} active days`}>
       {days.map(d => (
-        <span key={d.day} className={`ws-bar ${d.edits ? "on" : ""}`} style={{ height: d.edits ? `${Math.max(14, (d.edits / max) * 100)}%` : undefined }}
-          title={`${new Date(d.day + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}: ${d.edits ? `${d.edits} saves` : "no writing"}`} />
+        <span key={d.day} className={`ws-bar ${d.score ? "on" : ""}`} style={{ height: d.score ? `${Math.max(14, (d.score / max) * 100)}%` : undefined }}
+          title={`${new Date(d.day + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}: ${describeDay(d)}`} />
       ))}
     </div>
   );
@@ -105,7 +122,10 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
   const target = book.target_words || 0;
   const pct = target ? Math.min(100, Math.round((book.author_words / target) * 100)) : 0;
   const chapters = book.chapters_total || 0;
-  const recent = book.activity.filter(a => Date.parse(a.day) > Date.now() - 7 * DAY).reduce((n, a) => n + a.edits, 0);
+  const week = book.activity.filter(a => Date.parse(a.day) > Date.now() - 7 * DAY);
+  const weekWords = week.reduce((n, a) => n + a.added, 0);
+  const weekTalk = week.reduce((n, a) => n + a.comments + a.suggestions, 0);
+  const recentNote = weekWords ? `+${formatWords(weekWords)} words this week` : weekTalk ? `${weekTalk} comment${weekTalk === 1 ? "" : "s"} this week` : week.length ? "Edited this week" : "";
   return (
     <button className={`ws-book ${featured ? "featured" : ""}`} onClick={onOpen}>
       <div className="ws-book-top">
@@ -136,7 +156,7 @@ function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; on
         <div className="ws-last">
           <span className="ws-last-label">Last worked on</span>
           <span>{ago(book.last_worked_at)}{book.last_worked_by && book.role !== "owner" ? ` · ${book.last_worked_by}` : ""}</span>
-          {recent > 0 && <span className="muted">{recent} saves this week</span>}
+          {recentNote && <span className="muted">{recentNote}</span>}
         </div>
         <Spark book={book} />
       </div>
@@ -164,22 +184,23 @@ function firstName(books: WorkspaceBook[], email: string) {
 
 function Overview({ books }: { books: WorkspaceBook[] }) {
   const days = useDays(books, 84);
-  const activeDays = days.slice(-30).filter(d => d.edits).length;
-  const weekWords = days.slice(-7).reduce((n, d) => n + d.words, 0);
+  const activeDays = days.slice(-30).filter(d => d.score).length;
+  const weekWords = days.slice(-7).reduce((n, d) => n + d.added, 0);
+  const weekTalk = days.slice(-7).reduce((n, d) => n + d.comments + d.suggestions, 0);
   const words = books.reduce((n, b) => n + b.author_words, 0);
   const draftWords = books.reduce((n, b) => n + b.draft_words, 0);
   let streak = 0;
-  for (let i = days.length - 1; i >= 0; i--) { if (days[i].edits) streak++; else if (i === days.length - 1) continue; else break; }
+  for (let i = days.length - 1; i >= 0; i--) { if (days[i].score) streak++; else if (i === days.length - 1) continue; else break; }
   return (
     <section className="ws-overview">
       <div className="ws-stats">
         <div className="ws-stat"><span className="ws-stat-label">Words written</span><strong>{formatWords(words)}</strong><span className="muted">across {books.length} book{books.length === 1 ? "" : "s"}</span></div>
-        <div className="ws-stat"><span className="ws-stat-label">This week</span><strong>{weekWords > 0 ? "+" : ""}{formatWords(weekWords)}</strong><span className="muted">words in the manuscripts</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">This week</span><strong>{weekWords > 0 ? "+" : ""}{formatWords(weekWords)}</strong><span className="muted">words written{weekTalk ? ` · ${weekTalk} comment${weekTalk === 1 ? "" : "s"}` : ""}</span></div>
         <div className="ws-stat"><span className="ws-stat-label">Active days</span><strong>{activeDays}<span className="ws-of"> / 30</span></strong><span className="muted">{streak > 1 ? `${streak}-day streak` : "in the last month"}</span></div>
         <div className="ws-stat"><span className="ws-stat-label">Reference drafts</span><strong>{formatWords(draftWords)}</strong><span className="muted">words to write from</span></div>
       </div>
       <div className="ws-activity">
-        <div className="ws-section-head"><h2>Activity</h2><span className="muted">Saves per day, last 12 weeks</span></div>
+        <div className="ws-section-head"><h2>Activity</h2><span className="muted">Words written, revisions and comments, last 12 weeks</span></div>
         <ActivityCalendar days={days} />
       </div>
     </section>
@@ -377,7 +398,7 @@ function LibraryHome({ library }: { library: Library }) {
 
 function LibraryCard({ library, books }: { library: Library; books: WorkspaceBook[] }) {
   const days = useDays(books, 30);
-  const max = Math.max(...days.map(d => d.edits), 1);
+  const max = Math.max(...days.map(d => d.score), 1);
   const last = books.map(b => b.last_worked_at).filter(Boolean).sort().pop() ?? null;
   const words = books.reduce((n, b) => n + b.author_words, 0);
   return (
@@ -400,7 +421,7 @@ function LibraryCard({ library, books }: { library: Library; books: WorkspaceBoo
           <span>{library.pending_owner ? `Waiting for ${library.pending_owner}` : last ? `Last worked on ${ago(last).toLowerCase()}` : "Not started"}</span>
           {library.owner_name && library.role !== "owner" && !library.pending_owner && <span className="muted">{library.owner_name}’s library</span>}
         </div>
-        <div className="ws-spark" aria-hidden>{days.map(d => <span key={d.day} className={`ws-bar ${d.edits ? "on" : ""}`} style={{ height: d.edits ? `${Math.max(14, (d.edits / max) * 100)}%` : undefined }} />)}</div>
+        <div className="ws-spark" aria-hidden>{days.map(d => <span key={d.day} className={`ws-bar ${d.score ? "on" : ""}`} style={{ height: d.score ? `${Math.max(14, (d.score / max) * 100)}%` : undefined }} />)}</div>
       </div>
     </a>
   );

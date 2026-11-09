@@ -2049,7 +2049,7 @@ export interface WorkspaceBook {
   chapters_total: number;
   chapters_written: number;
   target_words: number;
-  activity: Array<{ day: string; edits: number; words: number }>;
+  activity: Array<{ day: string; added: number; removed: number; chapters: number; pages: number; comments: number; suggestions: number }>;
   library_id: string | null;
   shelf_id: string | null;
   private: boolean;

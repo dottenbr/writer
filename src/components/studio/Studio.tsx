@@ -349,7 +349,7 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
   }, [open]);
   useEffect(() => { setOpen(null); clearTimeout(hoverTimer.current); }, [location.nonce, view]);
 
-  const section = view === "write" ? (location.path.startsWith("craft/") ? "craft" : location.path.startsWith("research/") ? "research" : "write") : view;
+  const section = view === "write" ? (location.path.startsWith("craft/") ? "craft" : location.path.startsWith("research/") || location.path === "@sources" ? "research" : "write") : view;
   const docs = (group: string) => model.companions.filter(d => d.group === group && !d.isAsset);
   const entityFiles = model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path);
   const pageEntry = (d: { path: string; title: string }, meta?: string): MenuEntry => ({ label: d.title, meta, run: () => go(d.path), active: location.path === d.path });

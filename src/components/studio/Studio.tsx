@@ -351,7 +351,14 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
   }, [open]);
   useEffect(() => { setOpen(null); clearTimeout(hoverTimer.current); }, [location.nonce, view]);
 
-  const section = view === "write" ? (location.path.startsWith("craft/") ? "craft" : location.path.startsWith("research/") || location.path === "@sources" ? "research" : "write") : view;
+  // publishing files and book setup belong to no menu: highlight none rather than Manuscript
+  const pageGroup = model.companions.find(d => d.path === location.path)?.group;
+  const section = view === "write"
+    ? (location.path.startsWith("craft/") ? "craft"
+      : location.path.startsWith("research/") || location.path === "@sources" ? "research"
+      : pageGroup === "publication" || pageGroup === "source" ? ""
+      : "write")
+    : view;
   const docs = (group: string) => model.companions.filter(d => d.group === group && !d.isAsset);
   const entityFiles = model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path);
   const pageEntry = (d: { path: string; title: string }, meta?: string): MenuEntry => ({ label: d.title, meta, run: () => go(d.path), active: location.path === d.path });

@@ -5,3 +5,7 @@ src-tauri/target/
 *.log
 .env.local
 .env*.local
+
+# local working files: migration scripts, notes, editor settings
+.local/
+.claude/

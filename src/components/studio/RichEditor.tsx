@@ -10,7 +10,8 @@ import { useBookStore } from "../../store/useBookStore";
 import { useEditorBus } from "./editorBus";
 import { parseScenes } from "../../lib/scene-cards";
 import { markupChipsKey, type ChipConfig } from "../../lib/markup-chips";
-import { resolveAnchor } from "../../lib/anchors";
+import { ownChapter, resolveAnchor } from "../../lib/anchors";
+import { matterLookup } from "../../lib/book-matter";
 import { useChipPopover } from "./ChipPopover";
 import { citeLabel, staticChipContext } from "./useSources";
 import { staticChips } from "../../lib/static-chips";
@@ -137,10 +138,12 @@ export function RichEditor({ body, reloadKey, editable, placeholder, links, onCh
   useEffect(() => {
     if (!editor) return;
     const byPath = new Map(files.map(f => [f.path, f]));
+    const matterOf = matterLookup(files, model?.config);
+    const own = ownChapter(model?.chapters, useBookStore.getState().location.path);
     const config: ChipConfig = {
       anchors: !!links.chapterAnchors,
       editable,
-      resolve: a => resolveAnchor(a, model?.chapters ?? [], p => { const f = byPath.get(p); return f && f.loaded !== false ? f.content : undefined; }),
+      resolve: a => resolveAnchor(a, model?.chapters ?? [], p => { const f = byPath.get(p); return f && f.loaded !== false ? f.content : undefined; }, matterOf, own),
       cite: citeLabel,
       onChip: e => useChipPopover.getState().show({ mode: e.kind, view: e.view, at: e.at, index: e.index, id: e.id, rect: e.rect, editable: editor.isEditable }),
     };

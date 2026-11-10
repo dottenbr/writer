@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEditorBus } from "./editorBus";
 import { useBookStore } from "../../store/useBookStore";
 import { downloadBookAsset } from "../../lib/supabase-service";
@@ -13,14 +13,37 @@ const GROUP_LABEL: Record<string, string> = {
   matter: "Front & back matter", publication: "Publishing", source: "Book setup",
 };
 
-function SourceEditor({ path }: { path: string }) {
+/** Where `words` are in `text`, allowing any run of space or line breaks between them (YAML wraps). */
+function findLoose(text: string, words: string): [number, number] | null {
+  const parts = words.trim().split(/\s+/).filter(Boolean).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/['’]/g, "['’]").replace(/["“”]/g, "[\"“”]"));
+  if (!parts.length) return null;
+  const m = new RegExp(parts.join("\\s+"), "i").exec(text);
+  return m ? [m.index, m.index + m[0].length] : null;
+}
+
+function SourceEditor({ path, find, nonce }: { path: string; find?: string; nonce?: number }) {
   const { projectId, userId, canEdit, isOwner } = useAccess();
   const session = useDocSession(path, { projectId, userId, editable: canEdit, suggesting: canEdit && !isOwner });
   const setBusSession = useEditorBus(s => s.setSession);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const ready = !!session.text;
   useEffect(() => { setBusSession(session); }, [session, setBusSession]);
   useEffect(() => () => setBusSession(null), [setBusSession]);
+  // a chip that quotes words in this file (an afterword in the metadata) opens it at those words
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !find || !ready) return;
+    const at = findLoose(el.value, find);
+    if (!at) return;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(at[0], at[1]);
+    const line = el.value.slice(0, at[0]).split("\n").length - 1;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 20;
+    el.scrollTop = Math.max(0, line * lh - el.clientHeight / 3);
+    el.closest(".doc-scroll, main")?.scrollTo?.({ top: 0 });
+  }, [find, nonce, ready]);
   if (session.state === "loading" && !session.text) return <div className="doc-loading"><span className="spinner" /> Opening…</div>;
-  return <textarea className="markdown-source" value={session.text} readOnly={!canEdit} spellCheck={false} onChange={e => session.setText(e.target.value)} aria-label="File contents" />;
+  return <textarea ref={ref} className="markdown-source" value={session.text} readOnly={!canEdit} spellCheck={false} onChange={e => session.setText(e.target.value)} aria-label="File contents" />;
 }
 
 export function CompanionView() {
@@ -72,7 +95,7 @@ export function CompanionView() {
       ) : isMarkdown ? (
         <ActiveDoc key={file.path} path={file.path} writable chapterAnchors find={location.find} anchor={location.anchor} />
       ) : (
-        <SourceEditor key={file.path} path={file.path} />
+        <SourceEditor key={file.path} path={file.path} find={location.find} nonce={location.nonce} />
       )}
     </div>
   );

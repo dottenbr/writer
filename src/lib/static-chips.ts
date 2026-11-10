@@ -2,7 +2,7 @@
  * The editor's chips for read-only HTML (chapters not being edited, the context
  * panel, scene cards): anchors beside their facts, footnote numbers, short cites.
  */
-import { anchorLabel, parseAnchor, type Anchor, type ResolvedAnchor } from "./anchors";
+import { anchorLabel, factQuotes, MATTER_WORDS, parseAnchor, type Anchor, type ResolvedAnchor } from "./anchors";
 import { parseCitation, type CiteItem } from "./bibliography";
 import { CITATION } from "./pandoc-marks";
 
@@ -13,7 +13,8 @@ export interface StaticChipContext {
 
 const LIST = String.raw`\d+(?:\s*(?:[–-]|,|and|&amp;|&)\s*\d+)*`;
 const REF = String.raw`Chs?\.\s+${LIST}(?:,\s*Scenes?\s+${LIST})?`;
-const EM = String.raw`<em>(?:${REF}(?:\s*(?:;|,|and)\s*${REF})*)\.?</em>`;
+const MATTER = String.raw`(?:${MATTER_WORDS.replace("['’]", "(?:'|’|&#39;)")}|(?:Front|Back) matter:\s+[^<\n]+?)`;
+const EM = String.raw`<em>(?:(?:${REF}(?:\s*(?:;|,|and)\s*${REF})*)\.?|${MATTER})</em>`;
 const QUOTE = String.raw`(?:\s*:\s*(?:“[^”<\n]+”|&quot;(?:(?!&quot;)[^<\n])+&quot;))`;
 const ONE = String.raw`(?:${EM}${QUOTE}?|<em>off the page</em>)`;
 const TAIL = new RegExp(String.raw`\s*\(\s*(${ONE}(?:\s*;\s*${ONE})*)\s*\)[.;,]?(?=\s*(?:</p>|</li>|</td>|<ul|<ol|<br|$))`, "g");
@@ -22,13 +23,29 @@ const ANY = new RegExp(ONE, "g");
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const unesc = (s: string) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
-function chip(html: string, ctx: StaticChipContext): string {
-  const raw = unesc(html.replace(/<\/?em>/g, "*"));
-  const a = parseAnchor(raw);
+const rawOf = (html: string) => unesc(html.replace(/<\/?em>/g, "*").replace(/&#39;/g, "'"));
+const notAnchor = (html: string, ctx: StaticChipContext) => {
+  const a = parseAnchor(rawOf(html));
+  return !!a.matter && ctx.resolve?.(a)?.status === "not-anchor";
+};
+
+function chip(html: string, ctx: StaticChipContext, quotes?: string[] | null): string {
+  const raw = rawOf(html);
+  const parsed = parseAnchor(raw);
+  const a = quotes && !parsed.quote && !parsed.matter ? { ...parsed, factQuotes: quotes } : parsed;
   const r = ctx.resolve?.(a);
-  const where = r?.chapter ? `Chapter ${r.chapter.number}${r.chapter.title ? `: ${r.chapter.title}` : ""}${r.scene ? ` · Scene ${r.scene}${r.sceneTitle ? `: ${r.sceneTitle}` : ""}` : ""}` : "";
-  const title = [where, a.quote ? `“${a.quote}”` : "", r?.problem ?? ""].filter(Boolean).join("\n");
-  return `<span class="anchor-chip ${r?.status ?? "ok"}${a.quote ? " has-quote" : ""}" data-anchor="${esc(raw)}" title="${esc(title)}">${esc(anchorLabel(a))}</span>`;
+  if (a.matter && r?.status === "not-anchor") return html;
+  const where = r?.matter ? `${r.matter.name} (outside the chapters)` : r?.chapter ? `Chapter ${r.chapter.number}${r.chapter.title ? `: ${r.chapter.title}` : ""}${r.scene ? ` · Scene ${r.scene}${r.sceneTitle ? `: ${r.sceneTitle}` : ""}` : ""}` : "";
+  const quoted = a.quote ? `“${a.quote}”` : a.factQuotes ? a.factQuotes.map(q => `“${q}”`).join(" ") : "";
+  const title = [where, quoted, r?.problem ?? ""].filter(Boolean).join("\n");
+  return `<span class="anchor-chip ${r?.status ?? "ok"}${quoted ? " has-quote" : ""}" data-anchor="${esc(raw)}" title="${esc(title)}">${esc(anchorLabel(a))}</span>`;
+}
+
+/** The text of the fact a trailing anchor run closes: from its block's start to the run. */
+function factBefore(html: string, offset: number): string {
+  const head = html.slice(0, offset);
+  const start = Math.max(head.lastIndexOf("<li>"), head.lastIndexOf("<p>"), head.lastIndexOf("<td>"), head.lastIndexOf("<li "), head.lastIndexOf("<br"), 0);
+  return unesc(head.slice(start).replace(/<strong>([^<]*:)<\/strong>/g, "**$1**").replace(/<[^>]+>/g, "").replace(/&#39;/g, "'"));
 }
 
 /** Apply `fn` to the text between tags only. */
@@ -39,7 +56,12 @@ function textOnly(html: string, fn: (text: string) => string): string {
 export function staticChips(html: string, ctx: StaticChipContext): string {
   let out = html;
   if (out.includes("<em>")) {
-    out = out.replace(TAIL, (_m, group: string) => `<span class="anchor-chips">${[...group.matchAll(ANY)].map(m => chip(m[0], ctx)).join("")}</span>`);
+    out = out.replace(TAIL, (whole, group: string, offset: number, all: string) => {
+      const items = [...group.matchAll(ANY)].map(m => m[0]);
+      if (items.some(m => notAnchor(m, ctx))) return whole;
+      const quotes = items.every(m => !/:\s*(?:“|&quot;)/.test(m)) ? factQuotes(factBefore(all, offset)) : null;
+      return `<span class="anchor-chips">${items.map(m => chip(m, ctx, quotes)).join("")}</span>`;
+    });
     out = out.replace(ANY, m => chip(m, ctx));
   }
   if (out.includes("[^")) {

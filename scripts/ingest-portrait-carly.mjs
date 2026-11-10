@@ -30,7 +30,7 @@ async function walk(rootDir) {
   const entries = await readdir(rootDir, { withFileTypes: true });
   const files = [];
   for (const e of entries) {
-    if (['.git', '.DS_Store', '__pycache__', 'node_modules', '.vale'].includes(e.name) || e.name.endsWith('.pyc')) {
+    if (['.git', '.DS_Store', '__pycache__', 'node_modules', '.vale', 'inspiration'].includes(e.name) || e.name.endsWith('.pyc')) {
       if (e.name === '.vale') {
         // Include .vale/styles/config/vocabularies but skip .vale/generated
         const valeFiles = await walk(join(rootDir, e.name));
@@ -46,46 +46,81 @@ async function walk(rootDir) {
 
 const MOOD_BOARD_ITEMS = [
   {
+    sourceFile: '/Users/dominik/Development/writing/carly/portrait/inspiration/08-bronzino-portrait-of-a-young-man-1530s.jpg',
+    fileName: '08-bronzino-portrait-of-a-young-man-1530s.jpg',
+    label: 'Agnolo Bronzino — Portrait of a Young Man (1530s, The Met)',
+    notes: 'Florentine Mannerism (c. 1530s, The Metropolitan Museum of Art): an aristocratic youth in black silk holding his place in a book with cool, polite, unreadable self-possession — the psychological archetype of the guarded heir at Institut Les Mélèzes.',
+    tags: ['art', 'mannerism', 'renaissance', 'bronzino', 'portrait', 'heir', 'mb:x=16,y=16,w=310,z=11'],
+  },
+  {
+    sourceFile: '/Users/dominik/Development/writing/carly/portrait/inspiration/07-young-nero-marble-bust-palatino-c50ad.jpg',
+    fileName: '07-young-nero-marble-bust-palatino-c50ad.jpg',
+    label: 'Portrait Bust of the Young Nero (c. 50–54 AD, Museo Palatino)',
+    notes: 'Roman Imperial Antiquity (Julio-Claudian marble, c. 50–54 AD, Museo Palatino, Rome): carved when Nero was a teenage heir studying under Seneca before ascending to absolute rule — echoing both the novel’s title and the white-marble monuments of the capital.',
+    tags: ['art', 'antiquity', 'roman', 'sculpture', 'marble', 'heir', 'mb:x=350,y=16,w=290,z=10'],
+  },
+  {
+    sourceFile: '/Users/dominik/Development/writing/carly/portrait/inspiration/09-velazquez-prince-baltasar-carlos-1635.jpg',
+    fileName: '09-velazquez-prince-baltasar-carlos-1635.jpg',
+    label: 'Diego Velázquez — Prince Baltasar Carlos on Horseback (c. 1635, Prado)',
+    notes: 'Spanish Golden Age Baroque (1634–1635, Museo Nacional del Prado): the young dynastic heir mounted on a rearing royal stallion against snow-capped mountains, already carrying the marshal’s baton and stagecraft of absolutist succession.',
+    tags: ['art', 'baroque', 'velazquez', 'dynasty', 'succession', 'horse', 'mb:x=664,y=16,w=320,z=9'],
+  },
+  {
+    sourceFile: '/Users/dominik/Development/writing/carly/portrait/inspiration/10-vereshchagin-doors-of-tamerlane-1872.jpg',
+    fileName: '10-vereshchagin-doors-of-tamerlane-1872.jpg',
+    label: 'Vasily Vereshchagin — The Doors of Tamerlane (1872, Tretyakov Gallery)',
+    notes: '19th-Century Realism, Turkestan Series (1872, State Tretyakov Gallery, Moscow): two armed palace sentries guarding the towering, closed sanctuary doors of Timur (Tamerlane) — the historical namesake of General Teymur and the guarded palace thresholds of Part II.',
+    tags: ['art', 'realism', '19th-century', 'vereshchagin', 'timur', 'palace', 'central-asia', 'mb:x=1008,y=16,w=310,z=8'],
+  },
+  {
+    sourceFile: '/Users/dominik/Development/writing/carly/portrait/inspiration/11-hodler-eiger-monch-jungfrau-moonlight-1908.jpg',
+    fileName: '11-hodler-eiger-monch-jungfrau-moonlight-1908.jpg',
+    label: 'Ferdinand Hodler — Eiger, Mönch and Jungfrau in Moonlight (1908)',
+    notes: 'Early 20th-Century Swiss Symbolism / Modernism (1908, oil on canvas): Hodler’s nocturnal vision of the Bernese Oberland peaks rising above a sea of Alpine night fog — the exact Swiss massif overlooking the boarding school and the avalanche ridge.',
+    tags: ['art', 'symbolism', 'modernism', 'hodler', 'switzerland', 'alps', 'mb:x=350,y=430,w=340,z=7'],
+  },
+  {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/01_swiss_boarding_school_cover_1794230698678.jpg',
     fileName: '01-institut-les-melezes-twilight.jpg',
     label: 'Institut Les Mélèzes at twilight',
     notes: 'The Belle Époque boarding school château above the Rhone valley in December mist — warm library windows against snow-covered larches and the high Valais Alps.',
-    tags: ['cover', 'cover-dark', 'setting', 'switzerland', 'school', 'atmosphere', 'mb:x=16,y=18,w=380,z=6'],
+    tags: ['cover', 'cover-dark', 'setting', 'switzerland', 'school', 'atmosphere', 'mb:x=16,y=450,w=310,z=6'],
   },
   {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/02_alpine_avalanche_slope_1794230713825.jpg',
     fileName: '02-col-des-chamois-christmas-morning.jpg',
     label: 'The Col des Chamois avalanche bowl',
     notes: 'Chapter 6 ("2001"): Christmas morning above the tree line. Two solitary ski tracks cutting across the wind-loaded powder slab before the fracture line gives way.',
-    tags: ['avalanche', 'chapter-6', 'alps', 'turning-point', 'mb:x=424,y=18,w=330,z=2'],
+    tags: ['avalanche', 'chapter-6', 'alps', 'turning-point', 'mb:x=714,y=430,w=280,z=2'],
   },
   {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/03_discman_and_mix_cds_1999_1794230730313.jpg',
     fileName: '03-discman-and-sharpie-mix-cds-1999.jpg',
     label: '1999 Sony Discman & Sharpie CD-Rs',
     notes: 'Room 304 desk in Belvédère House: the shared language of American West Coast hip-hop ("The Chronic 2001", "Marshall Mathers", "All Eyez on Me") that bridges Boston and the palace.',
-    tags: ['1999', 'music', 'soundtrack', 'objects', 'dormitory', 'mb:x=782,y=18,w=320,z=3'],
+    tags: ['1999', 'music', 'soundtrack', 'objects', 'dormitory', 'mb:x=1018,y=430,w=300,z=3'],
   },
   {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/04_white_marble_capital_1794230746461.jpg',
     fileName: '04-white-marble-capital-boulevard.jpg',
     label: 'The white-marble capital at dusk',
     notes: 'Chapter 8 ("California Love"): eight-lane ceremonial boulevards, gold-leaf domes, ministerial colonnades, and desert heat shimmering at the edge of the monumental city.',
-    tags: ['capital', 'part-ii', 'architecture', 'state-visit', 'atmosphere', 'mb:x=16,y=540,w=360,z=4'],
+    tags: ['capital', 'part-ii', 'architecture', 'state-visit', 'atmosphere', 'mb:x=16,y=830,w=340,z=4'],
   },
   {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/05_palace_banquet_stage_1794230764378.jpg',
     fileName: '05-summer-palace-private-concert.jpg',
     label: 'The private concert in the banquet hall',
     notes: 'Chapter 9 ("Gangsta\'s Paradise"): crystal chandeliers, gold-rimmed porcelain, and a lone microphone stand in blue stage haze for an American rapper flown in for an audience of two teenagers.',
-    tags: ['palace', 'chapter-9', 'coolio', 'spectacle', 'mb:x=404,y=470,w=350,z=5'],
+    tags: ['palace', 'chapter-9', 'coolio', 'spectacle', 'mb:x=380,y=810,w=340,z=5'],
   },
   {
     sourceFile: '/Users/dominik/.gemini/antigravity-cli/brain/1a9d5668-0b86-4176-ae2c-6c88607c60d0/06_adidas_holdall_zurich_1794230782655.jpg',
     fileName: '06-three-stripe-holdall-room-304.jpg',
     label: 'The black holdall on the parquet floor',
     notes: 'Chapter 11 ("Mo Money Mo Problems"): the scuffed three-stripe sports bag returned from Paradeplatz with purple CHF 1,000 banknotes banded in white paper.',
-    tags: ['zurich', 'chapter-11', 'objects', 'complicity', 'mb:x=782,y=450,w=320,z=1'],
+    tags: ['zurich', 'chapter-11', 'objects', 'complicity', 'mb:x=744,y=790,w=310,z=1'],
   },
 ];
 

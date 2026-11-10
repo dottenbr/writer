@@ -7,7 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { BOOK_FORMS, formMeta, type BookForm, type BookKind } from "./book-config";
 import { splitDocument, markdownToPlain, countWords } from "./markdown-doc";
 
-export interface SourceFile { path: string; content: string; loaded?: boolean; asset?: unknown; version?: number }
+export interface SourceFile { path: string; content: string; loaded?: boolean; asset?: unknown; version?: number; title?: string | null }
 
 export type Group = "story" | "bible" | "plan" | "craft" | "research" | "matter" | "publication" | "source";
 
@@ -90,6 +90,9 @@ export const scenesPathFor = (c: { number: number; title: string; scenesPath?: s
 
 const pretty = (name: string) =>
   name.replace(/\.(md|ya?ml|txt)$/i, "").replace(/^\d+[-_]/, "").replace(/[-_]+/g, " ").replace(/^\w/, c => c.toUpperCase());
+
+/** A heading as a page name: "*Gilead* and the letter form" → "Gilead and the letter form". */
+const plainTitle = (t: string) => t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1/g, "$2").trim();
 
 const KNOWN_TITLES: Record<string, string> = {
   "bible/book-on-one-page.md": "The book on one page",
@@ -441,7 +444,7 @@ export function buildBookModel(files: SourceFile[]): BookModel {
     const split = isMd && f.loaded ? splitDocument(f.content) : null;
     companions.push({
       path: f.path,
-      title: KNOWN_TITLES[f.path] ?? split?.title ?? pretty(f.path.split("/").pop()!),
+      title: plainTitle(KNOWN_TITLES[f.path] || split?.title || (typeof split?.metadata.title === "string" ? split.metadata.title : "") || f.title || pretty(f.path.split("/").pop()!)),
       group,
       headings: split ? headingsOf(split.body) : [],
       isAsset: !!f.asset,

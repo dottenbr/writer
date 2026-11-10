@@ -8,7 +8,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey, type EditorState, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { anchorLabel, findAnchors, splitFact, type Anchor, type ResolvedAnchor } from "./anchors";
+import { anchorLabel, factQuotes, findAnchors, splitFact, type Anchor, type ResolvedAnchor } from "./anchors";
 import { CITATION, pandocMarks } from "./pandoc-marks";
 import { parseCitation, type CiteItem } from "./bibliography";
 
@@ -115,9 +115,10 @@ function chipEl(tag: string, className: string, label: string, title: string, on
 function anchorChip(a: Anchor, cfg: ChipConfig) {
   const r = cfg.resolve?.(a);
   const status = r?.status ?? "ok";
-  const where = r?.chapter ? `Chapter ${r.chapter.number}${r.chapter.title ? `: ${r.chapter.title}` : ""}${r.scene ? ` · Scene ${r.scene}${r.sceneTitle ? `: ${r.sceneTitle}` : ""}` : ""}` : "";
-  const title = [where, a.quote ? `“${a.quote}”` : "", r?.problem ?? ""].filter(Boolean).join("\n");
-  return { status: status + (a.quote ? " has-quote" : ""), title, label: anchorLabel(a) };
+  const where = r?.matter ? `${r.matter.name} (outside the chapters)` : r?.chapter ? `Chapter ${r.chapter.number}${r.chapter.title ? `: ${r.chapter.title}` : ""}${r.scene ? ` · Scene ${r.scene}${r.sceneTitle ? `: ${r.sceneTitle}` : ""}` : ""}` : "";
+  const quoted = a.quote ? `“${a.quote}”` : a.factQuotes ? a.factQuotes.map(q => `“${q}”`).join(" ") : "";
+  const title = [where, quoted, r?.problem ?? ""].filter(Boolean).join("\n");
+  return { status: status + (quoted ? " has-quote" : ""), title, label: anchorLabel(a) };
 }
 
 function blockDecos(node: PMNode, pos: number, cfg: ChipConfig, active: boolean, notes: Notes, out: Decoration[]) {
@@ -166,9 +167,15 @@ function blockDecos(node: PMNode, pos: number, cfg: ChipConfig, active: boolean,
   for (const m of pandocMarks(text)) if (m.kind === "line") hide(m.from, m.to, "md-line-mark");
   // Chapter anchors: a run at the end of the line becomes chips beside the fact; any others, chips in place.
   if (cfg.anchors) {
-    const all = findAnchors(text);
+    // a bare *Introduction* the book has no part for is a title in italics, not an anchor
+    const isAnchor = (a: Anchor) => !a.matter || cfg.resolve?.(a)?.status !== "not-anchor";
+    const found = findAnchors(text);
+    if (!found.length) return;
+    const parsedTail = splitFact(text);
+    const tailOk = parsedTail.anchors.every(isAnchor);
+    const tail = tailOk ? parsedTail : { ...parsedTail, tailFrom: text.length };
+    const all = found.filter(isAnchor);
     if (!all.length) return;
-    const tail = splitFact(text);
     const inTail = all.filter(a => a.from >= tail.tailFrom);
     all.forEach((a, i) => {
       if (a.from >= tail.tailFrom) return;
@@ -180,7 +187,8 @@ function blockDecos(node: PMNode, pos: number, cfg: ChipConfig, active: boolean,
     if (inTail.length) {
       hide(tail.tailFrom, text.length);
       const first = all.length - inTail.length;
-      const chips = inTail.map(a => anchorChip(a, cfg));
+      const quotes = inTail.every(a => !a.quote && !a.matter) ? factQuotes(tail.text) : null;
+      const chips = inTail.map(a => anchorChip(quotes ? { ...a, factQuotes: quotes } : a, cfg));
       widget(end, 1, `at-${inTail.map(a => a.raw).join("|")}-${chips.map(c => c.status).join()}`, (view, getPos) => {
         const wrap = document.createElement("span");
         wrap.className = "anchor-chips";

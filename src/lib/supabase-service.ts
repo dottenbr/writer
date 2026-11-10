@@ -1851,11 +1851,13 @@ export interface BookDocumentRow {
   path: string;
   content: string;
   version: number;
+  /** The document's title from the server (`doc_title`), known before its content is fetched. */
+  title?: string | null;
 }
 async function listBookDocumentVersions(projectId: string): Promise<BookDocumentRow[]> {
   const list: BookDocumentRow[] = [];
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await supabase.from('bookkit_documents').select('path,version').eq('project_id', projectId).order('path').range(offset, offset + 499);
+    const { data, error } = await supabase.from('bookkit_documents').select('path,version,title:doc_title').eq('project_id', projectId).order('path').range(offset, offset + 499);
     if (error) throw error;
     list.push(...(data ?? []).map(d => ({ ...d, content: '', loaded: false })));
     if ((data ?? []).length < 500) break;
@@ -1913,7 +1915,10 @@ export async function refreshBookDocuments(projectId: string, cached: BookDocume
   let changed = cached.filter(r => !r.asset).length !== rows.length;
   rows.forEach((r, i) => {
     const old = known.get(r.path);
-    if (old && old.version === r.version && (old.loaded || !fetchedUpFront(r.path))) { rows[i] = old; return; }
+    if (old && old.version === r.version && (old.loaded || !fetchedUpFront(r.path))) {
+      if ((old.title ?? null) !== (r.title ?? null)) { rows[i] = { ...old, title: r.title }; changed = true; } else rows[i] = old;
+      return;
+    }
     changed = true;
     if (fetchedUpFront(r.path) || old?.loaded) stale.push(r.path);
   });

@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ChipPopover } from "./ChipPopover";
 import { useSources } from "./useSources";
 import { parseAnchor } from "../../lib/anchors";
+import { matterLookup } from "../../lib/book-matter";
+import { bibliographyPath } from "../../lib/bibliography";
 import { useProjectStore } from "../../store/useProjectStore";
 import { useAuthStore } from "../../store/useAuthStore";
 import { prefs, useBookStore, writePrefs, type View } from "../../store/useBookStore";
@@ -353,7 +355,8 @@ function MenuBar({ onNewChapter }: { onNewChapter: () => void }) {
   const docs = (group: string) => model.companions.filter(d => d.group === group && !d.isAsset);
   const entityFiles = model.companions.filter(d => entityKindForPath(d.path)).map(d => d.path);
   const pageEntry = (d: { path: string; title: string }, meta?: string): MenuEntry => ({ label: d.title, meta, run: () => go(d.path), active: location.path === d.path });
-  const research = docs("research");
+  const bib = bibliographyPath(model.config);
+  const research = docs("research").filter(d => d.path !== bib && !d.path.startsWith("research/bib/")); // on the Sources page
   const researchFolders = [...new Set(research.map(d => d.path.split("/").slice(1, -1).join("/")))];
 
   const menus: Array<{ id: string; label: string; icon: string; run: () => void; items: MenuEntry[] }> = [
@@ -747,8 +750,8 @@ export function Studio() {
       const a = parseAnchor(chip.dataset.anchor!);
       const n = a.refs[0]?.chapters[0];
       const chapter = model.chapters.find(c => c.number === n);
-      if (!chapter) return;
-      const path = chapter.authorPath ?? chapter.currentPath;
+      const path = a.matter ? matterLookup(useBookStore.getState().files, model.config)(a.matter)?.path : chapter && (chapter.authorPath ?? chapter.currentPath);
+      if (!path) return;
       if (openTab && slug) { e.preventDefault(); openInNewTab(routeToUrl(slug, { view: "write", path }, model)); return; }
       go(path, { find: a.quote });
       return;

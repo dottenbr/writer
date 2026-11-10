@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useBookStore } from "../../store/useBookStore";
-import { resolveAnchor, type Anchor } from "../../lib/anchors";
+import { ownChapter, resolveAnchor, type Anchor } from "../../lib/anchors";
+import { matterLookup } from "../../lib/book-matter";
 import { bibliographyPath, fullCite, parseSources, shortCite, type CiteItem, type Source } from "../../lib/bibliography";
 
 const parsedCache = new Map<string, { content: string; list: Source[]; byId: Map<string, Source> }>();
@@ -43,8 +44,10 @@ export function useSources() {
 export function staticChipContext() {
   const s = useBookStore.getState();
   const byPath = new Map(s.files.map(f => [f.path, f]));
+  const matterOf = matterLookup(s.files, s.model?.config);
+  const own = ownChapter(s.model?.chapters, s.location.path);
   return {
-    resolve: (a: Anchor) => resolveAnchor(a, s.model?.chapters ?? [], p => { const f = byPath.get(p); return f && f.loaded !== false ? f.content : undefined; }),
+    resolve: (a: Anchor) => resolveAnchor(a, s.model?.chapters ?? [], p => { const f = byPath.get(p); return f && f.loaded !== false ? f.content : undefined; }, matterOf, own),
     cite: citeLabel,
   };
 }

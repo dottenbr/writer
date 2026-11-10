@@ -515,6 +515,10 @@ export const DOC_PAGES: DocPage[] = [
         text: "Every fact in the bible, plan, craft and research pages says where the book establishes it. One fact goes on one line, and its references come at the end in one parenthesis: `(*Ch. 13, Scene 2*: “quoted words”; *Ch. 14*)`. The Studio shows them as **chips beside the fact**, never inside the sentence. Each chip names the chapter and scene; hover for the chapter title, scene title and the quoted words, click to open the chapter at those words. A chip turns amber when the quoted words are no longer in the chapter, and red when the chapter or scene does not exist. Put the cursor in a line to edit its raw text, or click a chip and choose **Edit** to pick the chapter, scene and words. The bookmark button in the toolbar adds a reference to the line you are in.",
       },
       {
+        type: "p",
+        text: "What the book says outside its chapters is referenced the same way, by name: `*Afterword*`, `*Book description*` and `*About the author*` (from `publication/metadata.yaml`), `*Back matter: Reading Gilead*` or `*Front matter: Preface*` (the files listed in `book.yaml`, by title). Their chips open that text, and quoted words are checked against it. A line that is nothing but quotation, such as a scene card's **Lines that matter** or a line of dialogue with its speech tag (`“They’ll hold,” she said. (*Ch. 8*)`), needs no quote in its reference: its words are checked against the chapter, and on a scene card against the card's own chapter too. `bin/check` applies the same rules.",
+      },
+      {
         type: "h2",
         id: "tables",
         text: "Canon, Style Sheet and Ledgers as Records",

@@ -6,6 +6,7 @@ import { anchorLabel, findAnchors, formatAnchor, formatTrailing, parseAnchor, re
 import { blockAt, blockText, type ChipKind } from "../../lib/markup-chips";
 import { formatCitation, fullCite, parseCitation, type CiteItem } from "../../lib/bibliography";
 import { CITATION } from "../../lib/pandoc-marks";
+import { matterChoices, matterLookup } from "../../lib/book-matter";
 import { Icon } from "./common";
 import { useSources } from "./useSources";
 
@@ -27,6 +28,7 @@ const contentOf = (path: string) => {
   const f = useBookStore.getState().files.find(x => x.path === path);
   return f?.loaded === false ? undefined : f?.content;
 };
+const matterOf = (name: string) => { const s = useBookStore.getState(); return matterLookup(s.files, s.model?.config)(name); };
 
 /** Inline Markdown with *italics* (how anchors are written) as editor content. */
 function inlineContent(view: EditorView, text: string) {
@@ -56,13 +58,17 @@ export function AnchorForm({ initial, onSave, onCancel, onRemove }: { initial?: 
   const [asText, setAsText] = useState(multi);
   const [raw, setRaw] = useState(initial?.raw ?? "");
   const [offPage, setOffPage] = useState(!!initial?.offPage);
+  const files = useBookStore(s => s.files);
+  const config = useBookStore(s => s.model?.config);
+  const parts = useMemo(() => matterChoices(files, config), [files, config]);
+  const [matter, setMatter] = useState<string>(initial?.matter ?? "");
   const [chapter, setChapter] = useState<number>(initial?.refs[0]?.chapters[0] ?? chapters[0]?.number ?? 1);
   const [scene, setScene] = useState<number>(initial?.refs[0]?.scenes[0] ?? 0);
   const [quote, setQuote] = useState(initial?.quote ?? "");
   const ch = chapters.find(c => c.number === chapter);
-  const draft = asText ? raw.trim() : formatAnchor({ chapters: [chapter], scenes: scene ? [scene] : [], quote, offPage });
+  const draft = asText ? raw.trim() : formatAnchor({ chapters: [chapter], scenes: scene ? [scene] : [], quote, offPage, matter: matter || undefined });
   const parsed = useMemo(() => (findAnchors(draft)[0]?.raw === draft ? parseAnchor(draft) : null), [draft]);
-  const check = parsed ? resolveAnchor(parsed, chapters, contentOf) : null;
+  const check = parsed ? resolveAnchor(parsed, chapters, contentOf, matterOf) : null;
   return (
     <form className="chip-form" onSubmit={e => { e.preventDefault(); if (parsed) onSave(draft); }}>
       {asText ? (
@@ -72,12 +78,18 @@ export function AnchorForm({ initial, onSave, onCancel, onRemove }: { initial?: 
           <label className="check-row"><input type="checkbox" checked={offPage} onChange={e => setOffPage(e.target.checked)} /> <span>Off the page (fixed for continuity, never stated)</span></label>
           {!offPage && (
             <>
-              <label className="field">Chapter
-                <select value={chapter} onChange={e => { setChapter(Number(e.target.value)); setScene(0); }}>
-                  {chapters.map(c => <option key={c.number} value={c.number}>{c.number}. {c.title || `Chapter ${c.number}`}</option>)}
+              <label className="field">{parts.length ? "Where" : "Chapter"}
+                <select value={matter ? `m:${matter}` : String(chapter)} onChange={e => {
+                  const v = e.target.value;
+                  if (v.startsWith("m:")) setMatter(v.slice(2)); else { setMatter(""); setChapter(Number(v)); }
+                  setScene(0);
+                }}>
+                  {parts.length ? <optgroup label="Chapters">{chapters.map(c => <option key={c.number} value={c.number}>{c.number}. {c.title || `Chapter ${c.number}`}</option>)}</optgroup>
+                    : chapters.map(c => <option key={c.number} value={c.number}>{c.number}. {c.title || `Chapter ${c.number}`}</option>)}
+                  {parts.length > 0 && <optgroup label="Outside the chapters">{parts.map(p => <option key={p.anchor} value={`m:${p.anchor}`}>{p.anchor}</option>)}</optgroup>}
                 </select>
               </label>
-              {ch && ch.sceneTitles.length > 0 && (
+              {!matter && ch && ch.sceneTitles.length > 0 && (
                 <label className="field">Scene
                   <select value={scene} onChange={e => setScene(Number(e.target.value))}>
                     <option value={0}>The whole chapter</option>
@@ -85,14 +97,14 @@ export function AnchorForm({ initial, onSave, onCancel, onRemove }: { initial?: 
                   </select>
                 </label>
               )}
-              <label className="field">Words in the chapter <span className="muted">(optional)</span>
+              <label className="field">{matter ? "Words in it" : "Words in the chapter"} <span className="muted">(optional)</span>
                 <input value={quote} onChange={e => setQuote(e.target.value)} placeholder="The exact words that establish it" />
               </label>
             </>
           )}
         </>
       )}
-      {draft && !parsed && <div className="chip-problem">This isn’t an anchor yet. Write it like *Ch. 3, Scene 4*.</div>}
+      {draft && !parsed && <div className="chip-problem">This isn’t an anchor yet. Write it like *Ch. 3, Scene 4* or *Afterword*.</div>}
       {check?.problem && <div className="chip-problem">{check.problem}</div>}
       <div className="chip-actions">
         {onRemove && <button type="button" className="btn btn-sm btn-ghost danger" onClick={onRemove}>Remove</button>}
@@ -116,7 +128,7 @@ function AnchorPanel({ view, at, index, editable, isNew, close }: { view: Editor
   const target = isNew ? undefined : all[index];
   const tailStart = all.findIndex(a => a.from >= tail.tailFrom);
   const inTail = target ? target.from >= tail.tailFrom : true;
-  const resolved = target ? resolveAnchor(target, chapters, contentOf) : null;
+  const resolved = target ? resolveAnchor(target, chapters, contentOf, matterOf) : null;
 
   const save = (raw: string) => {
     if (target && !inTail) replaceText(view, at, target.from, target.to, raw);
@@ -142,10 +154,10 @@ function AnchorPanel({ view, at, index, editable, isNew, close }: { view: Editor
     close();
   };
   const open = () => {
-    const c = resolved?.chapter;
-    if (!c) return;
+    const path = resolved?.matter?.path ?? (resolved?.chapter && (resolved.chapter.authorPath ?? resolved.chapter.currentPath));
+    if (!path) return;
     close();
-    go(c.authorPath ?? c.currentPath, { find: target?.quote });
+    go(path, { find: target?.quote });
   };
 
   if (editing && editable) return <AnchorForm initial={target ? parseAnchor(target.raw) : undefined} onSave={save} onCancel={() => (isNew ? close() : setEditing(false))} onRemove={target ? remove : undefined} />;
@@ -154,7 +166,13 @@ function AnchorPanel({ view, at, index, editable, isNew, close }: { view: Editor
   return (
     <div className="chip-view">
       <div className="chip-eyebrow">{anchorLabel(target)}</div>
-      {target.offPage ? <p className="chip-text">Fixed for continuity, never stated in the chapters.</p> : (
+      {target.offPage ? <p className="chip-text">Fixed for continuity, never stated in the chapters.</p> : target.matter ? (
+        <>
+          <div className="chip-title">{resolved?.matter?.name ?? anchorLabel(target)}</div>
+          <div className="chip-sub">Outside the chapters</div>
+          {target.quote && <blockquote className="chip-quote">“{target.quote}”</blockquote>}
+        </>
+      ) : (
         <>
           <div className="chip-title">{c ? `${c.number}. ${c.title || `Chapter ${c.number}`}` : "Missing chapter"}</div>
           {resolved?.sceneTitle && <div className="chip-sub">Scene {resolved.scene}: {resolved.sceneTitle}</div>}
@@ -164,6 +182,7 @@ function AnchorPanel({ view, at, index, editable, isNew, close }: { view: Editor
       {resolved?.problem && <div className="chip-problem">{resolved.problem}</div>}
       <div className="chip-actions">
         {c && <button className="btn btn-sm" onClick={open}><Icon name="book" size={13} /> Open in the chapter</button>}
+        {resolved?.matter && <button className="btn btn-sm" onClick={open}><Icon name="book" size={13} /> Open it</button>}
         <span className="tb-spacer" />
         {editable && <button className="btn btn-sm" onClick={() => setEditing(true)}><Icon name="pen" size={13} /> Edit</button>}
       </div>

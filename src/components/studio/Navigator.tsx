@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { bibliographyPath } from "../../lib/bibliography";
 import { useBookStore } from "../../store/useBookStore";
 import { entityKindForPath, type CompanionDoc, type Group } from "../../lib/book-model";
 import { chapterForPath, chapterState, formatWords, Icon, useAccess } from "./common";
@@ -72,7 +73,9 @@ export function Navigator({ onNewChapter, scope = "write" }: { onNewChapter: () 
 
   const q = filter.trim().toLowerCase();
   const chapters = useMemo(() => (model?.chapters ?? []).filter(c => !q || c.label.toLowerCase().includes(q)), [model, q]);
-  const docs = useMemo(() => (model?.companions ?? []).filter(d => !q || d.title.toLowerCase().includes(q) || d.headings.some(h => h.text.toLowerCase().includes(q)) || (model?.entities ?? []).some(e => e.path === d.path && e.name.toLowerCase().includes(q))), [model, q]);
+  // the bibliography and its research/bib fragments are edited on the Sources page
+  const bib = bibliographyPath(model?.config);
+  const docs = useMemo(() => (model?.companions ?? []).filter(d => d.path !== bib && !d.path.startsWith("research/bib/")).filter(d => !q || d.title.toLowerCase().includes(q) || d.headings.some(h => h.text.toLowerCase().includes(q)) || (model?.entities ?? []).some(e => e.path === d.path && e.name.toLowerCase().includes(q))), [model, q, bib]);
   if (!model) return null;
 
   const current = chapterForPath(model.chapters, location.path);

@@ -3,6 +3,7 @@
  *
  *   *Ch. 9*   *Chs. 5–6*   *Ch. 3, Scene 4*   *Ch. 1, Scene 5; Ch. 6*   *off the page*
  *   *Ch. 9*: “forcing them underground”      (quoted words pin the fact to the text)
+ *   *Afterword*   *Book description*   *Back matter: Reading Gilead*   (text outside the chapters)
  *
  * In companion files every anchor sits at the end of its fact, in one parenthetical:
  *   - Thirty-eight at the January 1935 vote. (*Ch. 5, Scene 9*: “I was thirty-eight”; *Ch. 6*)
@@ -13,8 +14,12 @@ import type { ChapterInfo } from "./book-model";
 const LIST = String.raw`\d+(?:\s*(?:[–-]|,|and|&)\s*\d+)*`;
 const REF = String.raw`Chs?\.\s+${LIST}(?:,\s*Scenes?\s+${LIST})?`;
 const ANCHOR = String.raw`\*(?:${REF}(?:\s*(?:;|,|and)\s*${REF})*)\.?\*`;
+/** Parts of the book outside the chapters, as bookkit names them (companion.py MATTER_WORDS). */
+export const MATTER_WORDS = String.raw`Afterword|Foreword|Preface|Introduction|Acknowledge?ments|Author['’]s note|Book description|About the author|Copyright page|Dedication|Epigraph`;
+const MATTER = String.raw`(?:${MATTER_WORDS}|(?:Front|Back) matter:\s+[^*\n]+?)`;
 const QUOTE = String.raw`(?:\s*:\s*(?:“[^”\n]+”|"[^"\n]+"))`;
-const ONE = String.raw`(?:${ANCHOR}${QUOTE}?|\*off the page\*)`;
+const ONE = String.raw`(?:(?:${ANCHOR}|\*${MATTER}\*)${QUOTE}?|\*off the page\*)`;
+const MATTER_RE = new RegExp(String.raw`^\*(${MATTER})\*$`);
 
 /** One anchor with its quote, anywhere in a text. */
 export const ANCHOR_RE = () => new RegExp(ONE, "g");
@@ -34,6 +39,19 @@ export interface Anchor {
   refs: AnchorRef[];
   quote?: string;
   offPage?: boolean;
+  /** A part outside the chapters: "Afterword", "Back matter: Reading Gilead". */
+  matter?: string;
+  /** The quoted words of an all-quote fact this anchor closes (see `factQuotes`). */
+  factQuotes?: string[];
+}
+
+/** A part of the book outside the chapters, found by name. */
+export interface MatterPart {
+  name: string;
+  /** The file that holds it. */
+  path: string;
+  /** Its text, when loaded. */
+  text?: string;
 }
 
 function numbers(spec: string): number[] {
@@ -63,6 +81,8 @@ export function parseAnchor(raw: string): Anchor {
   if (/^\*off the page\*$/.test(raw.trim())) return { raw, refs: [], offPage: true };
   const quote = raw.match(/:\s*(?:“([^”\n]+)”|"([^"\n]+)")\s*$/);
   const head = quote ? raw.slice(0, quote.index) : raw;
+  const matter = head.trim().match(MATTER_RE);
+  if (matter) return { raw, refs: [], matter: matter[1].replace(/\s+/g, " "), quote: quote ? (quote[1] ?? quote[2]) : undefined };
   const refs = [...head.matchAll(REF_RE())].map(m => parseRef(m[0]));
   return { raw, refs, quote: quote ? (quote[1] ?? quote[2]) : undefined };
 }
@@ -80,14 +100,43 @@ export function splitFact(line: string): { text: string; anchors: Anchor[]; tail
   return { text: line.slice(0, m.index), anchors, tailFrom: m.index! };
 }
 
+const SPEECH = new Set("said says say asked asks ask thought thinks think answered answers replied replies called calls whispered whispers shouted shouts wrote writes sang sings read reads".split(" "));
+
+/**
+ * The quoted words of a fact that is nothing but quotation (bookkit's `quoted_fact`):
+ *   **Lines that matter:** “It's Wednesday,” … “The twenty-eighth of October.”
+ *   Nora’s card: “It is resting.”        “They’ll hold,” she said.
+ * Its anchors then check those words as if each were quoted in the anchor.
+ */
+export function factQuotes(fact: string): string[] | null {
+  let text = fact.replace(/^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)?(?:\*\*[^*\n]+:\*\*[ \t]*)?/, "");
+  const QUOTED = /“([^”\n]+)”|"([^"\n]+)"/g;
+  const first = text.search(/“[^”\n]+”|"[^"\n]+"/);
+  if (first < 0) return null;
+  const label = text.lastIndexOf(": ", first);
+  if (label >= 0) text = text.slice(label + 2);
+  const quotes = [...text.matchAll(QUOTED)].map(m => m[1] ?? m[2]);
+  const words = text.replace(QUOTED, " ").match(/[\p{L}\p{N}’'-]+/gu) ?? [];
+  const lower = words.map(w => w.toLowerCase());
+  if (words.length && !(words.length <= 6 && (lower.every(w => w === "and") || lower.some(w => SPEECH.has(w))))) return null;
+  return quotes.length ? quotes : null;
+}
+
+/** Quoted words compared as bookkit does: folded, quote marks left out on both sides. */
+const unquoted = (t: string) => t.replace(/["']/g, "").replace(/\s+/g, " ");
+function quotePieces(words: string): string[] {
+  return words.split(/…|\.\.\.|\s\/\s/).map(x => unquoted(foldText(x)).replace(/^[\s,.;:]+|[\s,.;:]+$/g, "")).filter(Boolean);
+}
+
 /** The anchor run written back: `(*Ch. 1*; *Ch. 2, Scene 3*: “words”)`. */
 export function formatTrailing(anchors: Anchor[]): string {
   return anchors.length ? ` (${anchors.map(a => a.raw).join("; ")})` : "";
 }
 
 /** Write an anchor from its parts. */
-export function formatAnchor(a: { chapters: number[]; scenes?: number[]; quote?: string; offPage?: boolean }): string {
+export function formatAnchor(a: { chapters: number[]; scenes?: number[]; quote?: string; offPage?: boolean; matter?: string }): string {
   if (a.offPage) return "*off the page*";
+  if (a.matter) return `*${a.matter}*${a.quote?.trim() ? `: “${a.quote.trim().replace(/[“”]/g, "")}”` : ""}`;
   const chapters = compact(a.chapters);
   const many = a.chapters.length > 1;
   const scenes = a.scenes?.length ? `, Scene${a.scenes.length > 1 ? "s" : ""} ${compact(a.scenes)}` : "";
@@ -111,6 +160,7 @@ function compact(list: number[]): string {
 /** A short label for a chip: "Ch. 5 · Sc. 9", "Chs. 5–6", "Off the page". */
 export function anchorLabel(a: Anchor): string {
   if (a.offPage) return "Off the page";
+  if (a.matter) return a.matter.replace(/^(?:Front|Back) matter:\s*/, "");
   return a.refs.map(r => {
     const ch = `Ch${r.chapters.length > 1 ? "s" : ""}. ${compact(r.chapters)}`;
     return r.scenes.length ? `${ch} · Sc. ${compact(r.scenes)}` : ch;
@@ -122,7 +172,8 @@ export function foldText(text: string): string {
   return text.normalize("NFKC").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[—–]/g, "-").replace(/[*_]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-export type AnchorStatus = "ok" | "no-chapter" | "no-scene" | "no-quote" | "off-page";
+/** `not-anchor`: a bare *Introduction* the book has no part for is a title in italics, not an anchor. */
+export type AnchorStatus = "ok" | "no-chapter" | "no-scene" | "no-quote" | "off-page" | "not-anchor";
 
 export interface ResolvedAnchor {
   status: AnchorStatus;
@@ -130,6 +181,8 @@ export interface ResolvedAnchor {
   chapter?: ChapterInfo;
   scene?: number;
   sceneTitle?: string;
+  /** The part outside the chapters a matter anchor names. */
+  matter?: MatterPart;
   problem?: string;
 }
 
@@ -142,9 +195,31 @@ function folded(path: string, content: string): string {
   return f;
 }
 
+const unquotedCache = new Map<string, { content: string; text: string }>();
+function foldedUnquoted(path: string, content: string): string {
+  const hit = unquotedCache.get(path);
+  if (hit && hit.content === content) return hit.text;
+  const text = unquoted(folded(path, content));
+  unquotedCache.set(path, { content, text });
+  return text;
+}
+
+/** The chapter a page belongs to: a scene-card file's chapter, or the chapter itself. */
+export function ownChapter(chapters: ChapterInfo[] | undefined, path: string): number | undefined {
+  return chapters?.find(c => c.scenesPath === path || c.authorPath === path || c.referencePath === path || c.currentPath === path)?.number;
+}
+
 /** Check an anchor against the book: do the chapter and scene exist, are the quoted words in the chapter? */
-export function resolveAnchor(a: Anchor, chapters: ChapterInfo[], contentOf: (path: string) => string | undefined): ResolvedAnchor {
+export function resolveAnchor(a: Anchor, chapters: ChapterInfo[], contentOf: (path: string) => string | undefined, matterOf?: (name: string) => MatterPart | undefined, own?: number): ResolvedAnchor {
   if (a.offPage) return { status: "off-page" };
+  if (a.matter) {
+    const part = matterOf?.(a.matter);
+    const explicit = /^(?:Front|Back) matter:/.test(a.matter);
+    if (!part) return explicit ? { status: "no-chapter", problem: `This book has no ${a.matter.replace(":", " titled")}.` } : { status: "not-anchor" };
+    if (a.quote && part.text !== undefined && !foldText(part.text).includes(foldText(a.quote)))
+      return { status: "no-quote", matter: part, problem: `These words are not in ${explicit ? `“${anchorLabel(a)}”` : `the ${anchorLabel(a).toLowerCase()}`} any more.` };
+    return { status: "ok", matter: part };
+  }
   const first = a.refs[0];
   const chapter = first ? chapters.find(c => c.number === first.chapters[0]) : undefined;
   for (const r of a.refs) {
@@ -166,6 +241,15 @@ export function resolveAnchor(a: Anchor, chapters: ChapterInfo[], contentOf: (pa
     });
     const known = named.some(c => contentOf(c.currentPath) !== undefined);
     if (known && !found) return { status: "no-quote", chapter, scene, sceneTitle, problem: "These words are not in the chapter any more." };
+  } else if (a.factQuotes?.length) {
+    // a scene card's lines may quote its own chapter while anchoring where they pay off
+    const numbers = [...a.refs.flatMap(r => r.chapters), ...(own ? [own] : [])];
+    const texts = numbers.map(n => chapters.find(c => c.number === n)).filter((c): c is ChapterInfo => !!c)
+      .map(c => { const content = contentOf(c.currentPath); return content === undefined ? undefined : foldedUnquoted(c.currentPath, content); });
+    if (texts.length && texts.every(t => t !== undefined)) {
+      const lost = a.factQuotes.filter(q => quotePieces(q).some(piece => !texts.some(t => t!.includes(piece))));
+      if (lost.length) return { status: "no-quote", chapter, scene, sceneTitle, problem: `Not in the chapter any more: ${lost.map(q => `“${q}”`).join(", ")}.` };
+    }
   }
   return { status: "ok", chapter, scene, sceneTitle };
 }

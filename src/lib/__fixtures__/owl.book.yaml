@@ -1,0 +1,83 @@
+# The only per-book configuration. See bookkit/templates/book.yaml.example.
+slug: the-owl-at-dusk
+title: The Owl at Dusk
+author: Peter S. Dubois
+language: en-US
+
+ai_policy: human-authored
+
+manuscript:
+  dir: manuscript
+  # The author's own text. The AI-written text he began from is kept beside it.
+  draft: draft
+  draft_policy: ai-generated
+  layout: flat
+  chapters: null
+  scenes: false
+  front_matter:
+    required: [chapter, title, status]
+    optional: [anchor, draft_budget_words]
+
+lint:
+  vale:
+    styles: [ManuscriptCore, Prose, AmericanSpelling, Vale]
+    vocab: OwlAtDusk
+    min_alert_level: suggestion
+
+publication:
+  formats: [docx, epub, pdf]
+  title_page: true
+  chapter_heading: "{title}"
+  metadata: publication/metadata.yaml
+  cover: publication/source-assets/cover.png
+
+companion:
+  standard: 1
+  retired:
+    - pattern: 'at the height of a man’s chest'
+      reason: the switch box is at the height of Nora's chest (Ch. 2)
+    - pattern: 'mine on the other'
+      reason: Ulla speaks of her young men going through the tunnel, not a boy of her own (Ch. 18)
+    - pattern: 'hand’s width open'
+      reason: the metal door stands open just wide enough to slip through; a person and a goat pass it (Ch. 1)
+    - pattern: '\bhead of the gully\b'
+      reason: the gully’s head is the hollow itself; the way in is simply by the gully (Chs. 6, 16)
+    - pattern: '\bbars? of soap\b'
+      reason: ash-lye soap stays soft and is kept in pots (Ch. 4)
+    - pattern: '\b(?:Owl|it) drew each letter\b'
+      reason: the Owl cannot see or draw; it tells Nora each shape, she draws it in charcoal and tells it what is on the floor (Ch. 6)
+    - pattern: '\btar pot\b|\bpot used for the tar\b'
+      reason: drinking water and soap are boiled in the great iron pot at the forge, never one used for tar (Chs. 3–4)
+    - pattern: '\bcows were milked\b'
+      reason: in summer Ennet's cows are on their own pastures along the mountain (Ch. 9)
+    - pattern: '\bin Gand already\b'
+      reason: nobody in Ennet knows how many of the eleven cattle came out of the tunnel alive (Chs. 14, 18)
+    - pattern: '\balways know the answer\b'
+      reason: the Owl says when it does not know; its weakness is that it gives every answer it is asked for (Chs. 3, 17)
+    - pattern: 'Gand’s horses'
+      reason: Gand has no horses on the page; it brings cattle (Chs. 8, 19)
+    - pattern: 'heard sung in eighty-one summers'
+      reason: the last verse is never sung; Agathe gives it to Nora to read (Ch. 15)
+    - pattern: '\ba made thing that thinks\b'
+      reason: the Owl never names what it is; the page never calls it a machine (Chs. 2, 6)
+    - pattern: '\bIt will not tell you what to do\b|\bAsk it anyway\b'
+      reason: Nora's card reads "It is resting. If it wakes, tell it what happened." (Ch. 21)
+    - pattern: '\bJori\b'
+      reason: the Gand boy of the earlier plan is gone; no child from Gand is named
+    - pattern: '\bsix summers\b'
+      reason: how many summers Nora has herded is never stated
+    - pattern: '\bNora(?:,| is) nineteen\b'
+      reason: Nora's age is never stated; Jakob Kessler is the one who is nineteen (Ch. 11)
+    - pattern: '\bMira(?:,| is) eight\b|\bMira is about ten\b'
+      reason: Mira's age is never stated
+    - pattern: '\btwelve years on\b'
+      reason: there is no coda years later; the book ends nine days over the pass (Ch. 21)
+    - pattern: '\bNora pulls the handle\b|\bpulled the handle\b'
+      reason: nobody touches the handle; the Owl wears out and stops at dusk (Ch. 20)
+    - pattern: '\bspring of the eighty-third\b'
+      reason: Nora leaves the morning after the midsummer fire of the eighty-third summer (Ch. 21)
+    - pattern: '\bOn the last night of September\b'
+      reason: the first snow comes in October in both years (Chs. 13, 20–21)
+    - pattern: '\bI have no other food\b'
+      reason: Elias's book says the roof feeds it while the sun is on it "and not a minute longer" (Ch. 6)
+

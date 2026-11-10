@@ -68,11 +68,11 @@ export function Brief() {
 
         <div className="stats-row">
           <div className="stat">
-            <div className="stat-value">{totalWordCount.toLocaleString()}</div>
+            <div className="stat-value">{totalWordCount.toLocaleString("en-US")}</div>
             <div className="stat-label">Words (~{estimatePages(totalWordCount)} pp)</div>
           </div>
           <div className="stat">
-            <div className="stat-value">{brief.targetWordCount.toLocaleString()}</div>
+            <div className="stat-value">{brief.targetWordCount.toLocaleString("en-US")}</div>
             <div className="stat-label">Target (~{estimatePages(brief.targetWordCount)} pp)</div>
           </div>
           <div className="stat">

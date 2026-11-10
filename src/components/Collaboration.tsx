@@ -1,5 +1,7 @@
+import { updateProjectMemberRole, createInviteLink, emailInvite } from "../lib/supabase-service";
 import { useState } from "react";
 import { useProjectStore } from "../store/useProjectStore";
+import { useAuthStore } from "../store/useAuthStore";
 
 export function Collaboration() {
   const {
@@ -8,11 +10,11 @@ export function Collaboration() {
     inviteUser,
     removeProjectMember,
     activeEditors,
-    userId,
   } = useProjectStore();
+  const { userId } = useAuthStore();
 
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"editor" | "viewer">("viewer");
+  const [role, setRole] = useState<"coauthor" | "editor" | "viewer">("editor");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,6 +22,8 @@ export function Collaboration() {
   const isOwner = currentProjectRole === "owner";
   const otherEditors = activeEditors.filter((e) => e.userId !== userId);
 
+  const [linkBusy, setLinkBusy] = useState("");
+  const [linkNote, setLinkNote] = useState("");
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) return;
@@ -28,7 +32,7 @@ export function Collaboration() {
     setLoading(true);
     try {
       await inviteUser(email.trim(), role);
-      setSuccess(`Invited ${email} as ${role}`);
+      setSuccess(`Access prepared for ${email} as ${role}. They can accept by signing in with that email. No email was sent.`);
       setEmail("");
     } catch (err: any) {
       setError(err?.message || "Failed to invite user");
@@ -76,13 +80,33 @@ export function Collaboration() {
                   )}
                 </div>
               </div>
-              <span className="collab-role-badge" data-role={member.role}>
-                {member.role}
-              </span>
+              {isOwner && member.userId!==userId ? <select aria-label={`Role for ${member.email}`} value={member.role} onChange={async e=>{
+                try{await updateProjectMemberRole(useProjectStore.getState().currentProjectId!,member.userId,e.target.value as 'coauthor'|'editor'|'viewer');await useProjectStore.getState().refreshMembers();setError('');}catch(err){setError((err as Error).message);}
+              }}><option value="editor">Editor</option><option value="coauthor">Co-author</option><option value="viewer">Viewer</option></select> : <span className="collab-role-badge" data-role={member.role}>
+                {member.role}{member.pending ? " · pending sign-in" : ""}
+              </span>}
+              {member.pending && isOwner && (
+                <button className="btn btn-sm collab-link-btn" disabled={linkBusy === member.email} onClick={async () => {
+                  setLinkBusy(member.email); setError(""); setLinkNote("");
+                  try {
+                    const link = await createInviteLink(useProjectStore.getState().currentProjectId!, member.email);
+                    try { await navigator.clipboard.writeText(link); setLinkNote(`Sign-in link for ${member.email} copied. Send it to them yourself; it works once and expires in 24 hours.`); }
+                    catch { setLinkNote(link); }
+                  } catch (err) { setError((err as Error).message); } finally { setLinkBusy(""); }
+                }}>{linkBusy === member.email ? "Creating…" : "Copy sign-in link"}</button>
+              )}
+              {member.pending && isOwner && (
+                <button className="btn btn-sm collab-link-btn" disabled={linkBusy === member.email} onClick={async () => {
+                  if (!confirm(`Email an invitation with a sign-in link to ${member.email}?`)) return;
+                  setLinkBusy(member.email); setError(""); setLinkNote("");
+                  try { await emailInvite(useProjectStore.getState().currentProjectId!, member.email); setLinkNote(`Invitation emailed to ${member.email}.`); }
+                  catch (err) { setError((err as Error).message); } finally { setLinkBusy(""); }
+                }}>Email invitation</button>
+              )}
               {isOwner && member.userId !== userId && (
                 <button
                   className="collab-remove-btn"
-                  onClick={() => removeProjectMember(member.userId)}
+                  onClick={() => void removeProjectMember(member.userId).catch(e=>setError(e.message))}
                   title="Remove member"
                 >
                   &times;
@@ -93,6 +117,7 @@ export function Collaboration() {
         </div>
       </div>
 
+      {linkNote && <p className="collab-link-note" role="status">{linkNote}</p>}
       {/* Invite form */}
       {isOwner && (
         <div className="collab-invite">
@@ -108,11 +133,12 @@ export function Collaboration() {
             />
             <select
               value={role}
-              onChange={(e) => setRole(e.target.value as "editor" | "viewer")}
+              onChange={(e) => setRole(e.target.value as "coauthor" | "editor" | "viewer")}
               className="form-input collab-role-select"
             >
               <option value="viewer">Viewer (comment only)</option>
-              <option value="editor">Editor (cowriter)</option>
+              <option value="editor">Editor</option>
+              <option value="coauthor">Co-author</option>
             </select>
             <button type="submit" className="btn btn-primary btn-sm" disabled={loading}>
               {loading ? "Inviting\u2026" : "Invite"}

@@ -1,0 +1,952 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useProjectStore } from "../store/useProjectStore";
+import { useAuthStore } from "../store/useAuthStore";
+import { useHomeStore } from "../store/useHomeStore";
+import { createLibraryWithShelves, getInspirationUrl, LIBRARY_SLUG, loadWorkspace, placeBook, type Library, type WorkspaceBook, type WorkspaceInboxThread } from "../lib/supabase-service";
+import { resolveThread } from "../lib/bookkit-collaboration";
+import { useBookStore } from "../store/useBookStore";
+import { generateAndCacheCoverThumbnail, inverseTextColorForTone, readCachedCover, type CachedCoverArt } from "../lib/cover-art";
+import { useLibraryStore, canWriteIn } from "../store/useLibraryStore";
+import { hostLibrary, libraryUrl } from "../lib/library-host";
+import { LibrarySettings } from "./LibrarySettings";
+import { bookSlug, navFlags, openInNewTab } from "../lib/book-url";
+import { NewBookDialog, UserMenu, useTheme } from "./studio/Studio";
+import { formatWords, Icon, initials } from "./studio/common";
+import { navigatePublic } from "../lib/public-routes";
+import { readLocal, writeLocal } from "../lib/local-cache";
+
+const DAY = 86400000;
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+function ago(when: string | null): string {
+  if (!when) return "Not yet";
+  const s = (Date.now() - Date.parse(when)) / 1000;
+  if (s < 60) return "Just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  const d = Math.round(s / 86400);
+  if (d === 1) return "Yesterday";
+  if (d < 7) return `${d} days ago`;
+  return new Date(when).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: new Date(when).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+
+/** Sequential steps of the accent hue for activity; 0 is the empty cell. */
+const level = (n: number, max: number) => (n <= 0 ? 0 : Math.min(4, Math.ceil((n / Math.max(1, max)) * 4)));
+
+interface DayTotal { day: string; added: number; removed: number; chapters: number; pages: number; comments: number; suggestions: number; score: number; books: string[] }
+
+/** How much happened on a day: words written count most; edits and conversations count too. Saves don't. */
+const scoreOf = (d: Omit<DayTotal, "score" | "books" | "day">) => d.added + d.removed / 2 + 40 * (d.comments + d.suggestions) + 25 * (d.chapters + d.pages);
+
+/** "+312 words · 2 chapters · 3 comments" */
+function describeDay(d: DayTotal): string {
+  const parts = [
+    d.added || d.removed ? `${d.added ? `+${d.added.toLocaleString("en-US")}` : ""}${d.added && d.removed ? " / " : ""}${d.removed ? `−${d.removed.toLocaleString("en-US")}` : ""} words` : "",
+    d.chapters ? `${d.chapters} chapter${d.chapters === 1 ? "" : "s"} revised` : "",
+    d.pages ? `${d.pages} page${d.pages === 1 ? "" : "s"} edited` : "",
+    d.comments ? `${d.comments} comment${d.comments === 1 ? "" : "s"}` : "",
+    d.suggestions ? `${d.suggestions} suggestion${d.suggestions === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || "Nothing written";
+}
+
+function useDays(books: WorkspaceBook[], days: number): DayTotal[] {
+  return useMemo(() => {
+    const map = new Map<string, DayTotal>();
+    const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+    for (let i = days - 1; i >= 0; i--) { const d = iso(new Date(today.getTime() - i * DAY)); map.set(d, { day: d, added: 0, removed: 0, chapters: 0, pages: 0, comments: 0, suggestions: 0, score: 0, books: [] }); }
+    for (const b of books) for (const a of b.activity) {
+      const t = map.get(a.day);
+      if (!t) continue;
+      t.added += a.added; t.removed += a.removed; t.chapters += a.chapters; t.pages += a.pages; t.comments += a.comments; t.suggestions += a.suggestions;
+      if (scoreOf(a)) t.books.push(b.name);
+    }
+    for (const t of map.values()) t.score = scoreOf(t);
+    return [...map.values()];
+  }, [books, days]);
+}
+
+/** Twelve weeks of work across every book, one cell per day. */
+function ActivityCalendar({ days }: { days: DayTotal[] }) {
+  const [hover, setHover] = useState<{ d: DayTotal; x: number; y: number } | null>(null);
+  const max = Math.max(...days.map(d => d.score), 1);
+  // Pad the start so columns are weeks starting on Monday.
+  const first = new Date(days[0].day + "T00:00:00Z");
+  const pad = (first.getUTCDay() + 6) % 7;
+  const cells: Array<DayTotal | null> = [...Array(pad).fill(null), ...days];
+  const weeks: Array<Array<DayTotal | null>> = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  const months = weeks.map((w, i) => {
+    const d = w.find(Boolean);
+    if (!d) return "";
+    const m = new Date(d.day + "T00:00:00Z").toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+    const prev = i > 0 ? weeks[i - 1].find(Boolean) : null;
+    return !prev || new Date(prev.day + "T00:00:00Z").getUTCMonth() !== new Date(d.day + "T00:00:00Z").getUTCMonth() ? m : "";
+  });
+  return (
+    <div className="ws-cal" onMouseLeave={() => setHover(null)}>
+      <div className="ws-cal-grid" role="img" aria-label="Writing activity for the last twelve weeks">
+        <div className="ws-cal-days" aria-hidden><span>Mon</span><span /><span>Wed</span><span /><span>Fri</span><span /><span /></div>
+        {weeks.map((w, i) => (
+          <div key={i} className="ws-cal-week">
+            <div className="ws-cal-month" aria-hidden>{months[i]}</div>
+            {w.map((d, j) => d ? (
+              <span key={j} className={`ws-cell l${level(d.score, max)}`}
+                onMouseEnter={e => { const r = (e.target as HTMLElement).getBoundingClientRect(); setHover({ d, x: r.left + r.width / 2, y: r.top }); }} />
+            ) : <span key={j} className="ws-cell blank" />)}
+          </div>
+        ))}
+      </div>
+      <div className="ws-cal-key" aria-hidden><span>Less</span>{[0, 1, 2, 3, 4].map(l => <span key={l} className={`ws-cell l${l}`} />)}<span>More</span></div>
+      {hover && (
+        <div className="ws-tip" style={{ left: hover.x, top: hover.y }}>
+          <strong>{new Date(hover.d.day + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })}</strong>
+          <span>{describeDay(hover.d)}</span>
+          {hover.d.books.length > 0 && <span className="muted">{[...new Set(hover.d.books)].join(", ")}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The last 30 days of one book as small bars. */
+function Spark({ book }: { book: WorkspaceBook }) {
+  const days = useDays([book], 30);
+  const max = Math.max(...days.map(d => d.score), 1);
+  return (
+    <div className="ws-spark" aria-label={`Activity in the last 30 days: ${days.filter(d => d.score).length} active days`}>
+      {days.map(d => (
+        <span key={d.day} className={`ws-bar ${d.score ? "on" : ""}`} style={{ height: d.score ? `${Math.max(14, (d.score / max) * 100)}%` : undefined }}
+          title={`${new Date(d.day + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}: ${describeDay(d)}`} />
+      ))}
+    </div>
+  );
+}
+
+function BookCover({ book }: { book: WorkspaceBook }) {
+  const initial = book.name.replace(/^(the|a|an)\s+/i, "").slice(0, 1).toUpperCase();
+  const coverFile = book.cover_file ?? null;
+  const [cover, setCover] = useState<CachedCoverArt | null>(() =>
+    coverFile ? readCachedCover(book.project_id, coverFile) : null
+  );
+
+  useEffect(() => {
+    if (!coverFile) {
+      setCover(null);
+      return;
+    }
+    const cached = readCachedCover(book.project_id, coverFile);
+    if (cached) {
+      setCover(cached);
+      return;
+    }
+    let live = true;
+    getInspirationUrl(book.project_id, coverFile)
+      .then((signedUrl) => {
+        if (!live || !signedUrl) return null;
+        return generateAndCacheCoverThumbnail(
+          book.project_id,
+          coverFile,
+          signedUrl,
+          book.cover_tone ?? null
+        );
+      })
+      .then((result) => {
+        if (live && result) setCover(result);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [book.project_id, coverFile, book.cover_tone]);
+
+  const tone = cover?.tone ?? book.cover_tone ?? null;
+  const textColor = cover?.textColor ?? (tone ? inverseTextColorForTone(tone) : undefined);
+
+  return (
+    <div
+      className={`ws-cover ${cover ? "has-art" : ""}`}
+      data-tone={tone ?? undefined}
+      style={
+        cover
+          ? {
+              backgroundImage: `url("${cover.dataUrl}")`,
+              color: textColor,
+            }
+          : undefined
+      }
+      aria-hidden
+    >
+      <span style={textColor ? { color: textColor } : undefined}>{initial}</span>
+    </div>
+  );
+}
+
+function BookCard({ book, onOpen, featured, library }: { book: WorkspaceBook; onOpen: () => void; featured?: boolean; library?: Library }) {
+  const target = book.target_words || 0;
+  const pct = target ? Math.min(100, Math.round((book.author_words / target) * 100)) : 0;
+  const chapters = book.chapters_total || 0;
+  const formLabel = book.form_label ?? "Novel";
+  const unresolved = book.unresolved_threads ?? 0;
+  const openComments = book.open_comments ?? 0;
+  const week = book.activity.filter(a => Date.parse(a.day) > Date.now() - 7 * DAY);
+  const weekWords = week.reduce((n, a) => n + a.added, 0);
+  const weekTalk = week.reduce((n, a) => n + a.comments + a.suggestions, 0);
+  const recentNote = weekWords ? `+${formatWords(weekWords)} words this week` : weekTalk ? `${weekTalk} comment${weekTalk === 1 ? "" : "s"} this week` : week.length ? "Edited this week" : "";
+  const owner = book.role === "owner";
+  const sharedBy = !owner ? (book.owner_name ? `${book.owner_name}’s book` : "Shared with you") : "";
+  return (
+    <button className={`ws-book ${featured ? "featured" : ""}`} onClick={onOpen}>
+      <div className="ws-book-top">
+        <BookCover book={book} />
+        <div className="ws-book-body">
+          <div className="ws-book-head-row">
+            <div className="ws-book-head">
+              <span className="ws-book-title">{book.name}</span>
+              <div className="ws-book-meta">
+                <span className="ws-book-form">{formLabel}</span>
+                {library && <span>{library.name}</span>}
+                {sharedBy && <span>{sharedBy}</span>}
+                {!owner && <span className="ws-role">{book.role === "viewer" ? "reader" : book.role}</span>}
+                {book.private && <span className="ws-role">private</span>}
+                {!book.is_bookkit && <span className="ws-role">classic</span>}
+              </div>
+            </div>
+            {featured && <span className="btn btn-primary btn-sm ws-continue"><Icon name="pen" size={13} /> Continue</span>}
+          </div>
+          <div className="ws-progress">
+            <div className="ws-progress-row">
+              <span><strong>{formatWords(book.author_words)}</strong> words{target ? <span className="muted"> of {formatWords(target)}</span> : null}</span>
+              {target > 0 && <span className="muted">{pct}%</span>}
+            </div>
+            <div className="ws-progress-bar"><span style={{ width: `${pct}%` }} /></div>
+            <div className="ws-progress-note muted">
+              {chapters ? `${book.chapters_written} of ${chapters} chapters written` : "No chapters yet"}
+              {book.draft_words > 0 && <> · {formatWords(book.draft_words)} draft</>}
+            </div>
+            {(unresolved > 0 || openComments > 0) && (
+              <div className="ws-book-threads-row">
+                <span className="ws-book-threads-pill has-open">
+                  <Icon name="comment" size={12} />
+                  <span>{unresolved} open thread{unresolved === 1 ? "" : "s"}{openComments ? ` · ${openComments} comment${openComments === 1 ? "" : "s"}` : ""}</span>
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="ws-book-foot">
+        <div className="ws-last">
+          <span className="ws-last-label">Last worked on</span>
+          <span>{ago(book.last_worked_at)}{book.last_worked_by && !owner ? ` · ${book.last_worked_by}` : ""}</span>
+          {recentNote && <span className="muted">{recentNote}</span>}
+        </div>
+        <Spark book={book} />
+      </div>
+    </button>
+  );
+}
+
+/** The workspace as last seen in this tab or browser: shown at once, then refreshed. */
+let workspaceMemory: { userId: string; books: WorkspaceBook[] } | null = null;
+const workspaceKey = (userId: string) => `workspace:${userId}`;
+
+function useBooks() {
+  const catalogLength = useProjectStore(s => s.projectCatalog.length);
+  const userId = useAuthStore(s => s.userId) ?? "";
+  const [books, setBooks] = useState<WorkspaceBook[] | null>(() =>
+    workspaceMemory?.userId === userId ? workspaceMemory.books : readLocal<WorkspaceBook[]>(workspaceKey(userId)) ?? null);
+  const [error, setError] = useState("");
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    let live = true;
+    loadWorkspace().then(b => {
+      workspaceMemory = { userId, books: b };
+      writeLocal(workspaceKey(userId), b);
+      if (live) { setBooks(b); setError(""); }
+    }).catch(e => { if (live) setError((e as Error).message); });
+    return () => { live = false; };
+  }, [catalogLength, version, userId]);
+  return { books, error, reload: () => setVersion(v => v + 1) };
+}
+
+function firstName(books: WorkspaceBook[], email: string) {
+  const own = books.find(b => b.role === "owner")?.owner_name ?? "";
+  return (own && !own.includes("@") ? own : email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase())).split(" ")[0];
+}
+
+function Overview({ books }: { books: WorkspaceBook[] }) {
+  const days = useDays(books, 84);
+  const activeDays = days.slice(-30).filter(d => d.score).length;
+  const weekWords = days.slice(-7).reduce((n, d) => n + d.added, 0);
+  const weekTalk = days.slice(-7).reduce((n, d) => n + d.comments + d.suggestions, 0);
+  const words = books.reduce((n, b) => n + b.author_words, 0);
+  const draftWords = books.reduce((n, b) => n + b.draft_words, 0);
+  const totalUnresolved = books.reduce((n, b) => n + (b.unresolved_threads ?? 0), 0);
+  const totalOpenComments = books.reduce((n, b) => n + (b.open_comments ?? 0), 0);
+  let streak = 0;
+  for (let i = days.length - 1; i >= 0; i--) { if (days[i].score) streak++; else if (i === days.length - 1) continue; else break; }
+  return (
+    <section className="ws-overview">
+      <div className="ws-stats">
+        <div className="ws-stat"><span className="ws-stat-label">Words written</span><strong>{formatWords(words)}</strong><span className="muted">across {books.length} book{books.length === 1 ? "" : "s"}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">This week</span><strong>{weekWords > 0 ? "+" : ""}{formatWords(weekWords)}</strong><span className="muted">words written{weekTalk ? ` · ${weekTalk} comment${weekTalk === 1 ? "" : "s"}` : ""}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Open conversations</span><strong>{totalUnresolved}</strong><span className="muted">thread{totalUnresolved === 1 ? "" : "s"} · {totalOpenComments} comment{totalOpenComments === 1 ? "" : "s"}</span></div>
+        <div className="ws-stat"><span className="ws-stat-label">Last 30 days</span><strong>{activeDays}</strong><span className="muted">active day{activeDays === 1 ? "" : "s"}{streak > 1 ? ` · ${streak}-day streak` : ""}{draftWords ? ` · ${formatWords(draftWords)} in drafts` : ""}</span></div>
+      </div>
+      <div className="ws-activity">
+        <div className="ws-section-head"><h2>Activity</h2><span className="muted">Words written, revisions and comments, last 12 weeks</span></div>
+        <ActivityCalendar days={days} />
+      </div>
+    </section>
+  );
+}
+
+function formatThreadPage(path: string): string {
+  const clean = path.replace(/\.md$/i, "");
+  const parts = clean.split("/");
+  const last = parts[parts.length - 1] ?? clean;
+  const label = last
+    .replace(/^\d+[-_]/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return parts.length > 1 ? `${parts[0]} / ${label}` : label;
+}
+
+function WorkspaceInbox({
+  books,
+  onOpenThread,
+  onReload,
+}: {
+  books: WorkspaceBook[];
+  onOpenThread: (book: WorkspaceBook, thread: WorkspaceInboxThread, forceNewTab?: boolean) => void;
+  onReload: () => void;
+}) {
+  const userId = useAuthStore((s) => s.userId) ?? "";
+  const [filter, setFilter] = useState<"all" | "attention" | "replies">("all");
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+
+  const bookById = useMemo(() => new Map(books.map((b) => [b.project_id, b])), [books]);
+  const allThreads = useMemo(() => {
+    const list: WorkspaceInboxThread[] = [];
+    for (const b of books) {
+      for (const t of b.inbox_threads ?? []) {
+        list.push(t);
+      }
+    }
+    return list.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+  }, [books]);
+
+  const attentionThreads = useMemo(
+    () => allThreads.filter((t) => !userId || t.latest_author_id !== userId || t.has_reply),
+    [allThreads, userId]
+  );
+  const repliedThreads = useMemo(
+    () => allThreads.filter((t) => t.has_reply),
+    [allThreads]
+  );
+
+  const displayed =
+    filter === "attention"
+      ? attentionThreads
+      : filter === "replies"
+        ? repliedThreads
+        : allThreads;
+
+  const totalOpenComments = allThreads.reduce((s, t) => s + t.message_count, 0);
+
+  const handleResolve = async (e: React.MouseEvent, threadId: string) => {
+    e.stopPropagation();
+    setResolvingId(threadId);
+    try {
+      await resolveThread(threadId, true);
+      onReload();
+    } catch {
+      /* ignore */
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
+  const tabs: Array<[typeof filter, string, number]> = [["all", "All open", allThreads.length], ["attention", "Needs attention", attentionThreads.length], ["replies", "With replies", repliedThreads.length]];
+  return (
+    <section className="ws-inbox" aria-label="Comments and responses inbox">
+      <div className="ws-inbox-head">
+        <div className="ws-section-head">
+          <h2>Inbox</h2>
+          <span className="muted">{allThreads.length} open thread{allThreads.length === 1 ? "" : "s"} · {totalOpenComments} comment{totalOpenComments === 1 ? "" : "s"}</span>
+        </div>
+        {allThreads.length > 0 && (
+          <div className="ws-inbox-tabs" role="tablist" aria-label="Filter the inbox">
+            {tabs.map(([id, label, n]) => (
+              <button key={id} type="button" role="tab" aria-selected={filter === id} className={`ws-inbox-tab ${filter === id ? "on" : ""}`} onClick={() => setFilter(id)}>
+                {label} <span className="muted">{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {displayed.length === 0 ? (
+        <div className="ws-inbox-empty muted">
+          <Icon name="comment" size={14} />
+          <span>{allThreads.length === 0 ? "All caught up. No open comment threads in your books." : "No open threads match this filter."}</span>
+        </div>
+      ) : (
+        <div className="ws-inbox-list">
+          {displayed.map((t) => {
+            const book = bookById.get(t.project_id);
+            if (!book) return null;
+            const fromOther = Boolean(userId && t.latest_author_id !== userId);
+            return (
+              <div
+                key={t.id}
+                role="button"
+                tabIndex={0}
+                className={`ws-inbox-item ${fromOther ? "needs-attention" : ""}`}
+                onClick={() => onOpenThread(book, t, false)}
+                onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onOpenThread(book, t, true); } }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenThread(book, t, false); } }}
+              >
+                <div className="ws-inbox-item-top">
+                  <div className="ws-inbox-item-where">
+                    <span className="ws-inbox-book">{t.book_name}</span>
+                    <span className="ws-inbox-sep">›</span>
+                    <span className="ws-inbox-path">{formatThreadPage(t.path)}</span>
+                  </div>
+                  <div className="ws-inbox-badges">
+                    {fromOther && t.has_reply ? <span className="ws-inbox-status new">New reply from {t.latest_author_name}</span>
+                      : fromOther ? <span className="ws-inbox-status new">Comment from {t.author_name}</span>
+                      : t.has_reply ? <span className="ws-inbox-status replied">{t.message_count} comments · replied</span>
+                      : <span className="ws-inbox-status">Waiting for a reply</span>}
+                    <time className="ws-inbox-time">{ago(t.updated_at)}</time>
+                  </div>
+                </div>
+                {t.quoted_text && <blockquote className="ws-inbox-quote">“{t.quoted_text}”</blockquote>}
+                <div className="ws-inbox-messages">
+                  <div className="ws-inbox-msg">
+                    <span className="avatar ws-inbox-avatar">{initials(t.author_name)}</span>
+                    <p><strong>{t.author_name}</strong> {t.first_body}</p>
+                  </div>
+                  {t.has_reply && (
+                    <div className="ws-inbox-msg is-reply">
+                      <span className="avatar ws-inbox-avatar">{initials(t.latest_author_name)}</span>
+                      <p><strong>{t.latest_author_name}</strong> {t.latest_body}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="ws-inbox-item-actions">
+                  <span className="btn btn-sm btn-ghost ws-inbox-open">Open in book <Icon name="chevron" size={12} /></span>
+                  <button type="button" data-no-tab className="btn btn-sm" disabled={resolvingId === t.id} onClick={(e) => void handleResolve(e, t.id)}>
+                    <Icon name="check" size={12} /> {resolvingId === t.id ? "Resolving…" : "Resolve"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Jump between libraries. */
+function LibrarySwitcher({ current }: { current: Library | null | undefined }) {
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return (
+    <div className="book-switcher" ref={ref}>
+      <button className="book-switcher-btn" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="book-switcher-name">{current ? current.name : "All libraries"}</span><Icon name="down" size={14} />
+      </button>
+      {open && (
+        <div className="menu book-menu">
+          <a
+            className={`menu-item ${current === null ? "current" : ""}`}
+            href={libraryUrl(null)}
+            onClick={(e) => {
+              if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                e.preventDefault();
+                selectLibrary(null);
+                setOpen(false);
+              }
+            }}
+          >
+            <Icon name="grid" size={15} /> <span className="menu-item-text">All libraries</span>
+          </a>
+          <div className="menu-sep" />
+          <div className="menu-label">Libraries</div>
+          {libraries.map(l => (
+            <a
+              key={l.id}
+              className={`menu-item ${current?.id === l.id ? "current" : ""}`}
+              href={libraryUrl(l.slug)}
+              onClick={(e) => {
+                if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                  e.preventDefault();
+                  selectLibrary(l.slug);
+                  setOpen(false);
+                }
+              }}
+            >
+              <Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span>
+              <span className="menu-meta host">{l.slug}.bookkit.net</span>
+            </a>
+          ))}
+          <div className="menu-sep" />
+          <button
+            data-no-tab
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              navigatePublic("/signup");
+            }}
+          >
+            <Icon name="plus" size={15} /> <span className="menu-item-text">New library &amp; shelves…</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopBar({ current, children }: { current: Library | null | undefined; children?: React.ReactNode }) {
+  const [theme, setTheme] = useTheme();
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  return (
+    <header className="topbar ws-topbar">
+      <div className="topbar-left">
+        <a
+          className="brand brand-home"
+          href={libraryUrl(null)}
+          title="All libraries"
+          onClick={(e) => {
+            if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              selectLibrary(null);
+            }
+          }}
+        >
+          <span className="brand-mark">b</span><span className="brand-name">bookkit</span>
+        </a>
+        <span className="topbar-slash">/</span>
+        <LibrarySwitcher current={current} />
+      </div>
+      <div className="topbar-right">
+        <a
+          className="btn btn-sm btn-quiet"
+          href="/docs"
+          onClick={(e) => {
+            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+              e.preventDefault();
+              navigatePublic("/docs");
+            }
+          }}
+        >
+          <Icon name="book" size={14} /> <span className="hide-sm">Docs</span>
+        </a>
+        {children}
+        <UserMenu theme={theme} setTheme={setTheme} />
+      </div>
+    </header>
+  );
+}
+
+/** Open a book: in place when it lives in this library, otherwise at its library's address. */
+function useOpenBook() {
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const currentId = useProjectStore(s => s.currentProjectId);
+  const switchProject = useProjectStore(s => s.switchProject);
+  const setHome = useHomeStore(s => s.setHome);
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  return (b: WorkspaceBook) => {
+    const slug = libraries.find(l => l.id === b.library_id)?.slug ?? null;
+    const path = "/" + bookSlug(catalog, b.project_id);
+    const activeHost = hostLibrary();
+    if (navFlags.openInNewTab) {
+      navFlags.openInNewTab = false;
+      openInNewTab(activeHost && slug !== activeHost ? libraryUrl(slug, path) : path);
+      return;
+    }
+    if (activeHost && slug !== activeHost) { window.location.href = libraryUrl(slug, path); return; }
+    if (!activeHost && slug !== selectedSlug) selectLibrary(slug);
+    navFlags.openLastPlace = true;
+    window.history.pushState(null, "", path);
+    setHome(false);
+    if (b.project_id !== currentId) void switchProject(b.project_id);
+  };
+}
+
+/** Open a specific comment thread inside its book and document. */
+function useOpenThread() {
+  const catalog = useProjectStore(s => s.projectCatalog);
+  const currentId = useProjectStore(s => s.currentProjectId);
+  const switchProject = useProjectStore(s => s.switchProject);
+  const setHome = useHomeStore(s => s.setHome);
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  return (b: WorkspaceBook, thread: WorkspaceInboxThread, forceNewTab = false) => {
+    const slug = libraries.find(l => l.id === b.library_id)?.slug ?? null;
+    const bSlug = bookSlug(catalog, b.project_id);
+    const targetUrl = `/${bSlug}/file/${thread.path}?thread=${encodeURIComponent(thread.id)}`;
+    const activeHost = hostLibrary();
+    if (forceNewTab || navFlags.openInNewTab) {
+      navFlags.openInNewTab = false;
+      openInNewTab(activeHost && slug !== activeHost ? libraryUrl(slug, targetUrl) : targetUrl);
+      return;
+    }
+    if (activeHost && slug !== activeHost) {
+      window.location.href = libraryUrl(slug, targetUrl);
+      return;
+    }
+    if (!activeHost && slug !== selectedSlug) selectLibrary(slug);
+    navFlags.openLastPlace = false;
+    window.history.pushState(null, "", targetUrl);
+    useBookStore.getState().setPanel("comments");
+    useBookStore.getState().setActiveThread(thread.id);
+    setHome(false);
+    if (b.project_id !== currentId) {
+      void switchProject(b.project_id);
+    } else {
+      useBookStore.getState().go(thread.path, {
+        find: thread.quoted_text ? thread.quoted_text.slice(0, 120) : undefined,
+      });
+    }
+  };
+}
+
+/** Shelf, library and privacy for one book, from its card. */
+function BookMenu({ book, library, onChanged }: { book: WorkspaceBook; library: Library; onChanged: () => void }) {
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const owner = book.role === "owner";
+  const canShelve = owner || canWriteIn(library);
+  if (!canShelve) return null;
+  const run = async (patch: Parameters<typeof placeBook>[1]) => {
+    setError("");
+    try { await placeBook(book.project_id, patch); setOpen(false); onChanged(); void reloadLibraries(); } catch (e) { setError((e as Error).message); }
+  };
+  return (
+    <div className="ws-book-menu" ref={ref} onClick={e => e.stopPropagation()}>
+      <button className="icon-btn" aria-label={`Options for ${book.name}`} aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="more" size={16} /></button>
+      {open && (
+        <div className="menu menu-right">
+          <div className="menu-label">Shelf</div>
+          {library.shelves.map(s => (
+            <button key={s.id} className={`menu-item ${book.shelf_id === s.id ? "current" : ""}`} onClick={() => void run({ shelf_id: s.id })}>
+              <span className="menu-item-text">{s.name}</span>{book.shelf_id === s.id && <Icon name="check" size={14} />}
+            </button>
+          ))}
+          <button className={`menu-item ${!book.shelf_id ? "current" : ""}`} onClick={() => void run({ shelf_id: null })}><span className="menu-item-text">No shelf</span>{!book.shelf_id && <Icon name="check" size={14} />}</button>
+          {owner && <>
+            <div className="menu-sep" />
+            <button className="menu-item" onClick={() => void run({ private: !book.private })}>
+              <Icon name={book.private ? "users" : "close"} size={15} /><span className="menu-item-text">{book.private ? "Share with the library again" : "Make private"}</span>
+            </button>
+            {libraries.filter(l => l.id !== library.id && canWriteIn(l)).length > 0 && <div className="menu-label">Move to library</div>}
+            {libraries.filter(l => l.id !== library.id && canWriteIn(l)).map(l => (
+              <button key={l.id} className="menu-item" onClick={() => void run({ library_id: l.id })}><Icon name="book" size={15} /><span className="menu-item-text">{l.name}</span></button>
+            ))}
+          </>}
+          {error && <div className="inline-error" role="alert">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LibraryHome({ library }: { library: Library }) {
+  const email = useAuthStore(s => s.userEmail) ?? "";
+  const { books, error, reload } = useBooks();
+  const open = useOpenBook();
+  const openThread = useOpenThread();
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const [creating, setCreating] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const [query, setQuery] = useState("");
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
+  useEffect(() => { document.title = `${library.name} · Bookkit`; }, [library.name]);
+  const all = (books ?? []).filter(b => b.library_id === library.id);
+  const shown = all.filter(b => !query || b.name.toLowerCase().includes(query.toLowerCase()));
+  const latest = all.find(b => b.last_worked_at);
+  const shelves = [...library.shelves].sort((a, b) => a.position - b.position);
+  const groups = [...shelves.map(s => ({ id: s.id as string | null, name: s.name, books: shown.filter(b => b.shelf_id === s.id) })),
+    { id: null, name: shelves.length ? "Not on a shelf" : "Books", books: shown.filter(b => !b.shelf_id || !shelves.some(s => s.id === b.shelf_id)) }]
+    .filter(g => g.id !== null || g.books.length > 0 || !shelves.length);
+  const roleLabel = library.role === "owner" ? "Your library" : library.role === "coauthor" ? "You’re a co-author" : library.role === "editor" ? "You’re an editor" : library.role === "viewer" ? "You’re a reader" : "A book here is shared with you";
+  const drop = async (shelf: string | null) => {
+    const id = dragging; setDragging(null); setDropOn(null);
+    const book = all.find(b => b.project_id === id);
+    if (!book || book.shelf_id === shelf) return;
+    try { await placeBook(book.project_id, { shelf_id: shelf }); reload(); } catch (e) { alert((e as Error).message); }
+  };
+  return (
+    <div className="workspace">
+      <TopBar current={library}>
+        {canWriteIn(library) && <button className="btn btn-sm btn-primary" onClick={() => setCreating(true)}><Icon name="plus" size={14} /> New book</button>}
+        <button className="btn btn-sm" onClick={() => setSettings(true)}><Icon name="gear" size={14} /> <span className="hide-sm">Library settings</span></button>
+      </TopBar>
+      <main className="ws-main">
+        <section className="ws-hero">
+          <div className="ws-date">{roleLabel}{library.owner_name && library.role !== "owner" ? ` · ${library.owner_name}` : ""}</div>
+          <h1>{library.name}</h1>
+          {library.description && <p className="ws-sub">{library.description}</p>}
+          <p className="ws-sub">{latest ? <>Hello {firstName(all, email)}. Last worked on: <button className="link-btn inline" onClick={() => open(latest)}>{latest.name}</button>, {ago(latest.last_worked_at).toLowerCase()}.</> : all.length ? "" : "No books here yet."}</p>
+          {library.pending_owner && <div className="ws-pending">This library is waiting for <strong>{library.pending_owner}</strong>. It becomes theirs the first time they sign in. <button data-no-tab className="link-btn inline" onClick={() => setSettings(true)}>Invite them</button></div>}
+        </section>
+        {error && !books && <div className="inline-error" role="alert">Couldn’t load the books: {error}</div>}
+        {!books && !error && <div className="studio-message"><span className="spinner" /> Loading the shelves…</div>}
+        {books && all.length > 0 && <Overview books={all} />}
+        {books && all.length > 0 && <WorkspaceInbox books={all} onOpenThread={openThread} onReload={reload} />}
+        {books && all.length > 3 && (
+          <div className="ws-filter"><Icon name="search" size={14} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a book" aria-label="Find a book" /></div>
+        )}
+        {books && groups.map(g => (
+          <section key={g.id ?? "none"} className={`ws-shelf ${dropOn === (g.id ?? "none") ? "drop" : ""}`}
+            onDragOver={e => { if (dragging) { e.preventDefault(); setDropOn(g.id ?? "none"); } }}
+            onDragLeave={e => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDropOn(null); }}
+            onDrop={e => { e.preventDefault(); void drop(g.id); }}>
+            <div className="ws-section-head"><h2>{g.name}</h2><span className="muted">{g.books.length}</span></div>
+            {g.books.length ? (
+              <div className="ws-grid">
+                {g.books.map((b, i) => (
+                  <div key={b.project_id} className="ws-book-wrap" draggable={b.role === "owner" || canWriteIn(library)}
+                    onDragStart={e => { setDragging(b.project_id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", b.name); }}
+                    onDragEnd={() => { setDragging(null); setDropOn(null); }}>
+                    <BookCard book={b} featured={i === 0 && g === groups[0] && !query && b.project_id === latest?.project_id} onOpen={() => open(b)} />
+                    <BookMenu book={b} library={library} onChanged={reload} />
+                  </div>
+                ))}
+              </div>
+            ) : <div className="ws-shelf-empty">{dragging ? "Drop the book here" : canWriteIn(library) ? "Empty shelf. Drag a book here, or add a new one." : "Nothing on this shelf yet."}</div>}
+          </section>
+        ))}
+      </main>
+      {creating && <NewBookDialog onClose={() => setCreating(false)} />}
+      {settings && <LibrarySettings library={library} onClose={() => { setSettings(false); void reloadLibraries(); reload(); }} />}
+    </div>
+  );
+}
+
+function LibraryCard({ library, books }: { library: Library; books: WorkspaceBook[] }) {
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  const days = useDays(books, 30);
+  const max = Math.max(...days.map(d => d.score), 1);
+  const last = books.map(b => b.last_worked_at).filter(Boolean).sort().pop() ?? null;
+  const words = books.reduce((n, b) => n + b.author_words, 0);
+  return (
+    <a
+      className="ws-library"
+      href={libraryUrl(library.slug)}
+      onClick={(e) => {
+        if (!hostLibrary() && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+          e.preventDefault();
+          selectLibrary(library.slug);
+        }
+      }}
+    >
+      <div className="ws-library-head">
+        <div>
+          <div className="ws-library-name">{library.name}</div>
+          <div className="ws-library-host">{library.slug}.bookkit.net</div>
+        </div>
+        <span className="ws-role">{library.role === "owner" ? "owner" : library.role === "viewer" ? "reader" : library.role}</span>
+      </div>
+      {library.description && <p className="ws-library-desc">{library.description}</p>}
+      <div className="ws-library-shelves">
+        {library.shelves.map(s => <span key={s.id} className="ws-shelf-chip">{s.name} <b>{books.filter(b => b.shelf_id === s.id).length}</b></span>)}
+        {!library.shelves.length && <span className="muted">No shelves yet</span>}
+      </div>
+      <div className="ws-book-foot">
+        <div className="ws-last">
+          <span className="ws-last-label">{books.length} book{books.length === 1 ? "" : "s"} · {formatWords(words)} words</span>
+          <span>{library.pending_owner ? `Waiting for ${library.pending_owner}` : last ? `Last worked on ${ago(last).toLowerCase()}` : "Not started"}</span>
+          {library.owner_name && library.role !== "owner" && !library.pending_owner && <span className="muted">{library.owner_name}’s library</span>}
+        </div>
+        <div className="ws-spark" aria-hidden>{days.map(d => <span key={d.day} className={`ws-bar ${d.score ? "on" : ""}`} style={{ height: d.score ? `${Math.max(14, (d.score / max) * 100)}%` : undefined }} />)}</div>
+      </div>
+    </a>
+  );
+}
+
+function NewLibraryDialog({ onClose }: { onClose: () => void }) {
+  const reloadLibraries = useLibraryStore(s => s.load);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
+  const [shelvesText, setShelvesText] = useState("Fiction, Nonfiction, Drafts & Ideas");
+  const [touched, setTouched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const auto = name.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[’'`]s\b/g, "").replace(/\blibrary\b/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
+  const value = touched ? slug : auto;
+  return (
+    <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="dialog" onSubmit={async e => {
+        e.preventDefault(); setBusy(true); setError("");
+        try {
+          const initialShelves = shelvesText
+            .split(",")
+            .map(s => s.trim())
+            .filter(Boolean)
+            .map(shelfName => ({ name: shelfName }));
+          const created = await createLibraryWithShelves(name, value, description, initialShelves);
+          await reloadLibraries();
+          if (hostLibrary()) {
+            window.location.href = libraryUrl(created.slug);
+          } else {
+            selectLibrary(created.slug);
+            onClose();
+          }
+        } catch (err) { setError((err as Error).message); setBusy(false); }
+      }}>
+        <h2>New library</h2>
+        <p className="dialog-sub">A library has its own address, its own shelves and its own people.</p>
+        <label className="field">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Heidi’s Library" /></label>
+        <label className="field">Address<div className="slug-field"><input value={value} onChange={e => { setTouched(true); setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")); }} placeholder="heidi" /><span>.bookkit.net</span></div></label>
+        {value && !LIBRARY_SLUG.test(value) && <div className="field-hint warn">Use lowercase letters, numbers and dashes.</div>}
+        <label className="field">Description (optional)<input value={description} onChange={e => setDescription(e.target.value)} placeholder="Novels, translations & essays" /></label>
+        <label className="field">Initial shelves (comma-separated)<input value={shelvesText} onChange={e => setShelvesText(e.target.value)} placeholder="Fiction, Nonfiction, Drafts & Ideas" /></label>
+        <div className="field-hint">
+          Want house styles &amp; a live preview?{" "}
+          <button type="button" className="link-btn inline" onClick={() => { onClose(); navigatePublic("/signup"); }}>
+            Open the full Library &amp; Shelves builder →
+          </button>
+        </div>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="dialog-actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || !name.trim() || !LIBRARY_SLUG.test(value)}>{busy ? "Creating…" : "Create library"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AllLibraries() {
+  const email = useAuthStore(s => s.userEmail) ?? "";
+  const libraries = useLibraryStore(s => s.libraries) ?? [];
+  const { books, error, reload } = useBooks();
+  const open = useOpenBook();
+  const openThread = useOpenThread();
+  const [creating, setCreating] = useState(false);
+  const [newLibrary, setNewLibrary] = useState(false);
+  const importProjectZip = useProjectStore(s => s.importProjectZip);
+  const [message, setMessage] = useState("");
+  useEffect(() => { document.title = "Bookkit"; }, []);
+  const all = books ?? [];
+  const recent = all.filter(b => b.last_worked_at).slice(0, 4);
+  const loose = all.filter(b => !b.library_id || !libraries.some(l => l.id === b.library_id));
+  const hour = new Date().getHours();
+  return (
+    <div className="workspace">
+      <TopBar current={null}>
+        <button className="btn btn-sm" onClick={() => setNewLibrary(true)}><Icon name="plus" size={14} /> <span className="hide-sm">New library</span></button>
+      </TopBar>
+      <main className="ws-main">
+        <section className="ws-hero">
+          <div className="ws-date">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
+          <h1>{hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"}{all.length ? `, ${firstName(all, email)}` : ""}</h1>
+          <p className="ws-sub">{libraries.length ? `${libraries.length} ${libraries.length === 1 ? "library" : "libraries"}, ${all.length} book${all.length === 1 ? "" : "s"}.` : "Start with a library: your own address on bookkit.net, with shelves for your books."}</p>
+        </section>
+        {error && <div className="inline-error" role="alert">Couldn’t load your books: {error}</div>}
+        {libraries.length > 0 && (
+          <section className="ws-shelf">
+            <div className="ws-section-head"><h2>Libraries</h2><span className="muted">{libraries.length}</span></div>
+            <div className="ws-grid">{libraries.map(l => <LibraryCard key={l.id} library={l} books={all.filter(b => b.library_id === l.id)} />)}</div>
+          </section>
+        )}
+        {books && all.length > 0 && <Overview books={all.some(b => b.role === "owner") ? all.filter(b => b.role === "owner") : all} />}
+        {books && all.length > 0 && <WorkspaceInbox books={all} onOpenThread={openThread} onReload={reload} />}
+        {recent.length > 0 && (
+          <section className="ws-shelf">
+            <div className="ws-section-head"><h2>Recently worked on</h2></div>
+            <div className="ws-grid">{recent.map(b => <BookCard key={b.project_id} book={b} library={libraries.find(l => l.id === b.library_id)} onOpen={() => open(b)} />)}</div>
+          </section>
+        )}
+        {loose.length > 0 && (
+          <section className="ws-shelf">
+            <div className="ws-section-head"><h2>Not in a library</h2><span className="muted">{loose.length}</span></div>
+            <div className="ws-grid">{loose.map(b => <BookCard key={b.project_id} book={b} onOpen={() => open(b)} />)}</div>
+          </section>
+        )}
+        {books && !libraries.length && !all.length && (
+          <section className="ws-empty">
+            <h2>Your books, in one place</h2>
+            <p>Write your manuscript like a document, with the plan, story bible and research one click away.</p>
+            <div className="welcome-actions">
+              <button className="btn btn-primary" onClick={() => setNewLibrary(true)}>Create your library</button>
+              <button className="btn" onClick={() => setCreating(true)}>Start a book</button>
+              <label className="btn">Import a Bookkit archive<input type="file" accept=".zip" hidden onChange={async e => { const file = e.target.files?.[0]; if (!file) return; try { await importProjectZip(file, setMessage); } catch (err) { setMessage((err as Error).message); } }} /></label>
+            </div>
+            {message && <p className="welcome-status" role="status">{message}</p>}
+          </section>
+        )}
+      </main>
+      {creating && <NewBookDialog onClose={() => setCreating(false)} />}
+      {newLibrary && <NewLibraryDialog onClose={() => setNewLibrary(false)} />}
+    </div>
+  );
+}
+
+/** The home page: on bookkit.net every library; on a library's address its shelves. */
+export function Workspace() {
+  const libraries = useLibraryStore(s => s.libraries);
+  const load = useLibraryStore(s => s.load);
+  const selectedSlug = useLibraryStore(s => s.selectedSlug);
+  const selectLibrary = useLibraryStore(s => s.selectLibrary);
+  const current = useLibraryStore(s => s.current());
+  const fresh = useLibraryStore(s => s.fresh);
+  useEffect(() => { if (!fresh) void load(); }, [fresh, load]);
+  if (!libraries) return <div className="studio-message"><span className="spinner" /> Opening your library…</div>;
+  const slug = hostLibrary() ?? selectedSlug;
+  if (!slug) return <AllLibraries />;
+  if (!current) {
+    return (
+      <div className="workspace">
+        <TopBar current={undefined} />
+        <main className="ws-main">
+          <section className="ws-empty">
+            <h2>No library here</h2>
+            <p>There’s no library at {slug}.bookkit.net that you can open. If someone invited you, sign in with the email they used.</p>
+            <a
+              className="btn btn-primary"
+              href={libraryUrl(null)}
+              onClick={(e) => {
+                if (!hostLibrary()) {
+                  e.preventDefault();
+                  selectLibrary(null);
+                }
+              }}
+            >
+              See your libraries
+            </a>
+          </section>
+        </main>
+      </div>
+    );
+  }
+  return <LibraryHome library={current} />;
+}

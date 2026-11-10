@@ -1,13 +1,20 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, lazy, Suspense } from "react";
 import { useProjectStore } from "../store/useProjectStore";
-import { Brief } from "./Brief";
-import { ChapterPlan } from "./ChapterPlan";
-import { Bible } from "./Bible";
-import { Manuscript } from "./Manuscript";
-import { ApiSettingsModal } from "./ApiSettingsModal";
-import { Manage } from "./Manage";
-import { Inspiration } from "./Inspiration";
 import type { TabId } from "../types";
+import { useHomeStore } from "../store/useHomeStore";
+import { bookIdForSlug, urlBookSlug } from "../lib/book-url";
+import { useLibraryStore } from "../store/useLibraryStore";
+import { hostLibrary, libraryUrl } from "../lib/library-host";
+
+const Studio = lazy(() => import("./studio/Studio").then((mod) => ({ default: mod.Studio })));
+const Workspace = lazy(() => import("./Workspace").then((mod) => ({ default: mod.Workspace })));
+const Brief = lazy(() => import("./Brief").then((mod) => ({ default: mod.Brief })));
+const ChapterPlan = lazy(() => import("./ChapterPlan").then((mod) => ({ default: mod.ChapterPlan })));
+const Bible = lazy(() => import("./Bible").then((mod) => ({ default: mod.Bible })));
+const Manuscript = lazy(() => import("./Manuscript").then((mod) => ({ default: mod.Manuscript })));
+const ApiSettingsModal = lazy(() => import("./ApiSettingsModal").then((mod) => ({ default: mod.ApiSettingsModal })));
+const Manage = lazy(() => import("./Manage").then((mod) => ({ default: mod.Manage })));
+const Inspiration = lazy(() => import("./Inspiration").then((mod) => ({ default: mod.Inspiration })));
 
 
 const TABS: { id: TabId; label: string }[] = [
@@ -19,8 +26,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "manage", label: "Manage" },
 ];
 
+function canNavigate() { return window.dispatchEvent(new Event("writer-before-navigation", {cancelable:true})); }
+
 function ProjectSwitcher() {
-  const projects = useProjectStore((s) => s.projects);
+  const projects = useProjectStore((s) => s.projectCatalog);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const switchProject = useProjectStore((s) => s.switchProject);
   const createProject = useProjectStore((s) => s.createProject);
@@ -65,6 +74,7 @@ function ProjectSwitcher() {
               key={p.id}
               className={`project-list-item ${p.id === currentProjectId ? "current" : ""}`}
               onClick={() => {
+                if(!canNavigate())return;
                 switchProject(p.id);
                 setShowProjectSwitcher(false);
               }}
@@ -153,16 +163,17 @@ function SaveIndicator() {
   const dirty = useProjectStore((s) => s.dirty);
   const lastSaved = useProjectStore((s) => s.lastSaved);
   const saveToStorage = useProjectStore((s) => s.saveToStorage);
+  const syncStatus = useProjectStore((s) => s.syncStatus);
 
   return (
-    <div className="save-indicator" style={{ cursor: "pointer" }} onClick={() => void saveToStorage()}>
+    <div className="save-indicator" style={{ cursor: "pointer" }} onClick={() => { if(window.dispatchEvent(new Event("writer-save-document", {cancelable:true}))) void saveToStorage(); }}>
       <span className={`save-dot ${dirty ? "dirty" : ""}`} />
-      {dirty ? "Unsaved changes" : lastSaved ? "Saved" : ""}
+      {dirty ? "Unsaved changes" : lastSaved ? `Saved · ${syncStatus}` : syncStatus}
     </div>
   );
 }
 
-export function Layout() {
+function LegacyLayout() {
   const activeTab = useProjectStore((s) => s.activeTab);
   const setActiveTab = useProjectStore((s) => s.setActiveTab);
   const saveToStorage = useProjectStore((s) => s.saveToStorage);
@@ -172,8 +183,33 @@ export function Layout() {
   const showApiSettings = useProjectStore((s) => s.showApiSettings);
   const setShowApiSettings = useProjectStore((s) => s.setShowApiSettings);
   const focusMode = useProjectStore((s) => s.focusMode);
+  const currentProjectRole = useProjectStore((s) => s.currentProjectRole);
   const [newProjectName, setNewProjectName] = useState("");
   const hasProject = !!currentProject;
+  const canEdit = currentProjectRole === "owner" || currentProjectRole === "coauthor" || currentProjectRole === "editor";
+
+  useEffect(() => {
+    document.title = currentProject?.name ? `${currentProject.name} · Bookkit` : "Bookkit";
+  }, [currentProject?.name]);
+
+  function renderActiveTab() {
+    switch (activeTab) {
+      case "brief":
+        return <Brief />;
+      case "plan":
+        return <ChapterPlan />;
+      case "bible":
+        return <Bible />;
+      case "manuscript":
+        return <Manuscript />;
+      case "inspiration":
+        return <Inspiration />;
+      case "manage":
+        return <Manage />;
+      default:
+        return null;
+    }
+  }
 
   return (
     <div className="layout">
@@ -182,7 +218,7 @@ export function Layout() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
           </svg>
-          <span className="topbar-logo-text">Writer</span>
+          <span className="topbar-logo-text">bookkit</span>
         </div>
 
         <div className="topbar-divider" />
@@ -196,7 +232,7 @@ export function Layout() {
             <button
               key={tab.id}
               className={`tab-button ${activeTab === tab.id ? "active" : ""} ${!hasProject ? "disabled" : ""}`}
-              onClick={() => hasProject && setActiveTab(tab.id)}
+              onClick={() => hasProject && canNavigate() && setActiveTab(tab.id)}
               disabled={!hasProject}
             >
               {tab.label}
@@ -206,8 +242,8 @@ export function Layout() {
 
         <div className="topbar-actions">
           {hasProject && <SaveIndicator />}
-          {hasProject && (
-            <button className="btn btn-sm" onClick={() => void saveToStorage()}>
+          {hasProject && canEdit && (
+            <button className="btn btn-sm" onClick={() => { if(window.dispatchEvent(new Event("writer-save-document", {cancelable:true}))) void saveToStorage(); }}>
               Save ({navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+S)
             </button>
           )}
@@ -283,17 +319,83 @@ export function Layout() {
             </div>
           </div>
         ) : (
-          <>
-            {activeTab === "brief" && <Brief />}
-            {activeTab === "plan" && <ChapterPlan />}
-            {activeTab === "bible" && <Bible />}
-            {activeTab === "manuscript" && <Manuscript />}
-            {activeTab === "inspiration" && <Inspiration />}
-            {activeTab === "manage" && <Manage />}
-          </>
+          <Suspense
+            fallback={
+              <div className="content">
+                <div className="content-narrow">
+                  <div className="card" style={{ padding: 16 }}>Loading…</div>
+                </div>
+              </div>
+            }
+          >
+            {renderActiveTab()}
+          </Suspense>
         )}
       </div>
-      {showApiSettings && <ApiSettingsModal onClose={() => setShowApiSettings(false)} />}
+      {showApiSettings && (
+        <Suspense fallback={null}>
+          <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
+        </Suspense>
+      )}
     </div>
   );
+}
+
+/** Back and forward between the workspace and a book. */
+function useHomeHistory() {
+  const setHome = useHomeStore((s) => s.setHome);
+  useEffect(() => {
+    const onPop = () => {
+      if (window.location.pathname === "/") { setHome(true); return; }
+      if (!useHomeStore.getState().home) return; // a book is open: the Studio follows the address
+      setHome(false);
+      const { projectCatalog, currentProjectId, switchProject } = useProjectStore.getState();
+      const id = bookIdForSlug(projectCatalog, urlBookSlug());
+      if (id && id !== currentProjectId) void switchProject(id);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [setHome]);
+}
+
+/** A book always opens at its library's address (old links on bookkit.net are sent there). */
+function useLibraryAddress(home: boolean) {
+  const catalogStatus = useProjectStore((s) => s.catalogStatus);
+  const catalog = useProjectStore((s) => s.projectCatalog);
+  const currentId = useProjectStore((s) => s.currentProjectId);
+  const libraries = useLibraryStore((s) => s.libraries);
+  const load = useLibraryStore((s) => s.load);
+  useEffect(() => { if (catalogStatus === "ready" && !libraries) void load(); }, [catalogStatus, libraries, load]);
+  useEffect(() => {
+    if (home || catalogStatus !== "ready" || !libraries || !currentId) return;
+    const activeHost = hostLibrary();
+    if (!activeHost) return;
+    const book = catalog.find((p) => p.id === currentId);
+    if (!book) return;
+    const want = libraries.find((l) => l.id === book.libraryId)?.slug ?? null;
+    if (want !== activeHost) window.location.replace(libraryUrl(want, window.location.pathname + window.location.hash));
+  }, [home, catalogStatus, libraries, currentId, catalog]);
+}
+
+export function Layout() {
+  useHomeHistory();
+  const home = useHomeStore((s) => s.home);
+  useLibraryAddress(home);
+  const currentProject = useProjectStore((s) => s.currentProject());
+  const catalogBookkit = useProjectStore((s) => s.projectCatalog.find((p) => p.id === s.currentProjectId)?.bookkitSlug != null);
+  const catalogStatus = useProjectStore((s) => s.catalogStatus);
+  const showApiSettings = useProjectStore((s) => s.showApiSettings);
+  const setShowApiSettings = useProjectStore((s) => s.setShowApiSettings);
+  const modal = showApiSettings && (
+    <Suspense fallback={null}>
+      <ApiSettingsModal onClose={() => setShowApiSettings(false)} />
+    </Suspense>
+  );
+  const fallback = <div className="studio-message"><span className="spinner" /> Opening your books…</div>;
+  if (catalogStatus === "ready" && home) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
+  if (!home && catalogBookkit) return <Suspense fallback={fallback}><Studio />{modal}</Suspense>;
+  if (!currentProject && catalogStatus !== "ready") return fallback;
+  if (!currentProject) return <Suspense fallback={fallback}><Workspace />{modal}</Suspense>;
+  if (currentProject.bookkitSlug) return <Suspense fallback={fallback}><Studio />{modal}</Suspense>;
+  return <LegacyLayout />;
 }

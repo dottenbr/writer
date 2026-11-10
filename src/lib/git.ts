@@ -1,5 +1,5 @@
 /**
- * Git integration for Writer.
+ * Git integration for bookkit.
  *
  * When running inside Tauri, uses the shell plugin to call git CLI.
  * When running in the browser (dev mode), these are no-ops that log to console.
@@ -159,7 +159,7 @@ export async function saveAndCommit(
       await gitAdd(repoPath, [".writer/project.json"]);
       return gitCommit(
         repoPath,
-        message || `Writer: auto-save ${new Date().toLocaleString()}`
+        message || `bookkit: auto-save ${new Date().toLocaleString()}`
       );
     } catch (e: any) {
       return { success: false, output: "", error: e.message };

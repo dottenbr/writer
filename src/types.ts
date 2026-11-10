@@ -8,6 +8,7 @@ export interface Project {
   name: string;
   createdAt: string;
   storagePath?: string;
+  bookkitSlug?: string;
   brief: Brief;
   acts: ProjectAct[];
   chapters: Chapter[];
@@ -121,6 +122,8 @@ export function deriveChapterNumbers(chapters: Chapter[]): Map<string, number> {
 export interface Chapter {
   id: string;
   number: number;
+  version?: number;
+  updatedAt?: string;
   sectionType: SectionType;
   title: string;
   act: string | null;
@@ -164,6 +167,7 @@ export interface Bible {
 
 export interface Character {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   role: "protagonist" | "antagonist" | "supporting" | "minor" | "mentioned";
@@ -205,6 +209,7 @@ export interface CharacterRelationship {
 
 export interface Thread {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   type: "main" | "subplot" | "thematic" | "mystery" | "romance";
@@ -220,6 +225,7 @@ export interface Thread {
 
 export interface Location {
   id: string;
+  version?: number;
   name: string;
   alsoKnownAs: string[];
   timeframe: string;
@@ -234,6 +240,7 @@ export interface Location {
 
 export interface CodexEntry {
   id: string;
+  version?: number;
   entryType: "event" | "institution" | "term" | "person" | "timeline" | "doctrine" | "constraint";
   category: string;
   name: string;
@@ -287,7 +294,7 @@ export interface InspirationItem {
   addedAt: string;
 }
 
-export type TabId = "brief" | "plan" | "bible" | "manuscript" | "inspiration" | "manage";
+export type TabId = "book" | "brief" | "plan" | "bible" | "manuscript" | "inspiration" | "manage";
 
 export type BibleSection =
   | "characters"
@@ -350,6 +357,8 @@ export function createDefaultChapter(number: number, sectionType: SectionType = 
   return {
     id: crypto.randomUUID(),
     number,
+    version: 1,
+    updatedAt: new Date().toISOString(),
     sectionType,
     title: "",
     act: null,

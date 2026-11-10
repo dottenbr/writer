@@ -1,0 +1,96 @@
+# The only per-book configuration. See bookkit/templates/book.yaml.example.
+slug: words-given
+title: Words Given
+# A pseudonym, never linked to any other name the author writes under.
+author: Samuel Matthis
+language: en-GB
+
+ai_policy: human-authored
+
+manuscript:
+  dir: manuscript
+  # The author's own text. The AI-written text he began from is kept beside it.
+  draft: draft
+  draft_policy: ai-generated
+  # Seven weeks; each week is a part. Chapter numbers run through the 40
+  # days, the 6 Sundays and the epilogue (47); the preface, the how-to, the
+  # prayer page and the acknowledgements are front and back matter below.
+  layout: parts
+  chapters: null
+  scenes: false
+  front_matter:
+    required: [chapter, title, status]
+    # title:    the reading's label, "Day Fifteen" or "The Second Sunday"
+    # subtitle: the phrase or topic, "Our daily bread"
+    # kind:     day | sunday | epilogue
+    optional: [subtitle, kind, part, part_title, draft_budget_words]
+
+lint:
+  vale:
+    styles: [ManuscriptCore, Prose, Vale, OxfordSpelling]
+    vocab: WordsGiven
+    min_alert_level: suggestion
+    spelling: false  # OxfordSpelling checks against en_GB-ize instead
+    # Quotations keep their source's spelling (the NRSVue is American): text in
+    # single quotation marks (a ’ followed by a letter is an apostrophe, not the
+    # closing mark) and block quotations.
+    token_ignores: ['‘(?:[^‘’]|’\p{L})*’', '(?m)^>.*$']
+
+publication:
+  formats: [docx, epub, pdf]
+  title_page: true
+  chapter_heading: "{title}"
+  chapter_subtitle: "{subtitle}"
+  part_heading: "Week {number_word}"
+  metadata: publication/metadata.yaml
+  cover: publication/source-assets/cover.png
+  # Greek in the PDF: Pagella has no polytonic Greek, no lunate sigma (Sunday
+  # II's Sinaiticus transcription) and no yogh (Sunday V's Wycliffite text).
+  # Libertinus Serif, from Tectonic's bundle, has all three; only those
+  # characters switch to it.
+  pdf_greek_font:
+    regular: LibertinusSerif-Regular.otf
+    italic: LibertinusSerif-Italic.otf
+    bold: LibertinusSerif-Bold.otf
+    bold_italic: LibertinusSerif-BoldItalic.otf
+  # Unnumbered sections outside the readings: front matter after the
+  # copyright page, back matter after the readings and before the notes.
+  front_matter:
+    - frontmatter/01-preface.md
+    - frontmatter/02-how-to-use-this-book.md
+    - frontmatter/03-the-prayer.md
+  back_matter:
+    - backmatter/acknowledgements.md
+
+# Pandoc citations [@key, locator]: Chicago notes, collected as endnotes at the
+# back of the book, grouped by reading, then a list of works cited (Chicago
+# shortens a note after its first use anywhere in the book, so the reader
+# needs the full entries in one place).
+citations:
+  bibliography: research/bibliography.yaml
+  csl: chicago-notes-bibliography
+  notes: endnotes
+  bibliography_section: true
+  bibliography_title: Works Cited
+
+# The companion-file standard (bookkit STANDARD.md): bible/, outline/ with a
+# section card file per reading, craft/, research/README.md.
+companion:
+  standard: 1
+  kind: nonfiction
+  retired:
+    - pattern: 'translation prepared for this book'
+      reason: the author's own translations are credited "my translation"
+    - pattern: '\bUlfilas\b'
+      reason: the book writes Wulfila
+    - pattern: '\bthe Tatian\b'
+      reason: the Fourth Sunday calls the Old High German gospel harmony the Fulda harmony
+    - pattern: 'New Revised Standard Version(?!,? Updated)'
+      reason: the Bible is the NRSVue, the New Revised Standard Version, Updated Edition
+    - pattern: '[Tt]en days before Yom Kippur'
+      reason: Day Three says the Ten Days of Penitence
+    - pattern: 'lets go of what is owed him'
+      reason: the First Sunday renders Taanit 25b literally, 'passes over his measures'
+    - pattern: 'deserves? to be (?:heard|seen) at (?:its|their) (?:best|strongest)'
+      reason: fairness is shown, not announced (the author's decision, 8 November 2026)
+

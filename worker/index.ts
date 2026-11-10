@@ -1,0 +1,428 @@
+import { AI_PROMPT_LIMIT } from '../src/lib/ai-policy';
+import { assistantPolicy, declaredPolicy } from '../src/lib/policy-blocks';
+import { applyHouseStyle, applySpokenCommands, correctVoiceTerms, onlyPunctuationChanged, voiceVocabulary } from '../src/lib/voice-text';
+interface Env { ASSETS:{fetch:(request:Request)=>Promise<Response>}; SUPABASE_URL:string; SUPABASE_PUBLISHABLE_KEY:string; SUPABASE_SECRET_KEY?:string; AI?:{run:(model:string,input:unknown,options?:unknown)=>Promise<any>}; EMAIL?:{send:(message:any)=>Promise<{messageId?:string}>} }
+/** Models included with Bookkit through Cloudflare Workers AI. No user key needed. */
+export const INCLUDED_MODELS=[
+ {id:'@cf/moonshotai/kimi-k2.6',label:'Kimi K2.6 (included)'},
+ {id:'@cf/zai-org/glm-5.3',label:'GLM 5.3 (included)'},
+ {id:'@cf/deepseek-ai/deepseek-v4-pro-0813',label:'DeepSeek V4 Pro (included)'},
+ {id:'@cf/openai/gpt-oss-120b',label:'gpt-oss 120B (included)'},
+];
+export const INCLUDED_PROMPT_LIMIT=90000;
+const json=(body:unknown,status=200)=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+async function limitedBody(request:Request):Promise<any>{
+ const reader=request.body?.getReader();if(!reader)throw new Error('Request body required.');const chunks:Uint8Array[]=[];let total=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>768000){await reader.cancel();throw new Error('Request too large. Select fewer context chapters.');}chunks.push(value);}}finally{reader.releaseLock();}
+ const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return JSON.parse(new TextDecoder().decode(bytes));
+}
+async function checkRequest(body:any,headers:Record<string,string>,env:Env,signal:AbortSignal,limit:number):Promise<Response|null>{
+ if(typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>limit)return json({error:`Choose a smaller document or fewer context chapters (maximum ${limit.toLocaleString('en-US')} characters).`},400);
+ if(!/^[a-f0-9-]{36}$/i.test(body.projectId??''))return json({error:'Open a book before requesting assistance.'},400);
+ if(!['review','companion'].includes(body.mode))return json({error:'Only editorial reviews and companion updates are supported.'},400);
+ if(body.mode==='companion'&&(!/^(bible|outline|craft)\/[^\\]+\.md$/.test(body.path??'')||(body.path as string).split('/').includes('..')))return json({error:'AI updates are limited to bible, outline and craft documents.'},400);
+ const access=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/has_project_access',{method:'POST',headers,body:JSON.stringify({p_project_id:body.projectId,p_min_role:'editor'}),signal});
+ if(!access.ok||await access.json()!==true)return json({error:'Editing access to this book is required.'},403);
+ return null;
+}
+
+/** The book's own AI policy (book.yaml `ai_policy`), as the assistant's instructions for this request. */
+async function bookPolicy(body:any,headers:Record<string,string>,env:Env,signal:AbortSignal):Promise<string>{
+ const rows:any=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_documents?select=content&project_id=eq.${body.projectId}&path=eq.book.yaml`,{headers,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const base=assistantPolicy(declaredPolicy(String(rows?.[0]?.content??'')));
+ return base+'\n\n'+(body.mode==='review'?'Return editorial observations only. Do not produce a replacement document.':'Return only the requested companion document. Do not turn narrative planning notes into manuscript prose.');
+}
+async function included(body:any,env:Env,headers:Record<string,string>,signal:AbortSignal):Promise<Response>{
+ if(!env.AI)return json({error:'Included AI is not configured on this server.'},503);
+ if(body.action==='models')return json({models:INCLUDED_MODELS});
+ const model=INCLUDED_MODELS.find(m=>m.id===body.model)?.id??INCLUDED_MODELS[0].id;
+ const rejected=await checkRequest(body,headers,env,signal,INCLUDED_PROMPT_LIMIT);if(rejected)return rejected;
+ const policy=await bookPolicy(body,headers,env,signal);
+ const max=body.mode==='companion'?16384:4096;
+ const data=await env.AI.run(model,{messages:[{role:'system',content:policy},{role:'user',content:body.prompt}],max_tokens:max});
+ const choice=data?.choices?.[0];
+ const reason=choice?.finish_reason;
+ if(reason&&reason!=='stop')return json({error:'The model did not finish a complete response. No proposal was applied. Use a smaller document or narrower request.'},422);
+ const raw=choice?.message?.content??data?.response??(Array.isArray(data?.output)?data.output.flatMap((o:any)=>o?.content??[]).filter((c:any)=>c?.type==='output_text').map((c:any)=>c.text).join('\n'):undefined);
+ const text=typeof raw==='string'?raw.replace(/^\s*<think>[\s\S]*?<\/think>\s*/,''):'';
+ if(!text.trim())return json({error:'The model returned no usable text.'},422);
+ return json({text,model});
+}
+
+const esc=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+/** Show a code in two halves, "123 456", so it is easy to read and type. */
+export const spacedCode=(code:string)=>code.length>=6&&code.length%2===0?code.slice(0,code.length/2)+' '+code.slice(code.length/2):code;
+
+/** Bookkit's own sign-in codes: 6 digits, 15 minutes, 5 tries. */
+export const CODE_MINUTES=15, CODE_TRIES=5;
+const sha256=async(text:string)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const codeHash=(code:string,userId:string,secret:string)=>sha256(`${secret.slice(0,16)}:${userId}:${code}`);
+function newCode():string{const n=crypto.getRandomValues(new Uint32Array(1))[0]%1000000;return String(n).padStart(6,'0');}
+/** Store a fresh code for this account that unlocks the given Supabase token. */
+async function issueCode(env:Env,userId:string,tokenHash:string,tokenType:'magiclink'|'invite',signal:AbortSignal):Promise<string>{
+ const code=newCode();
+ const admin={apikey:env.SUPABASE_SECRET_KEY!,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'};
+ const res=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?on_conflict=user_id`,{method:'POST',headers:admin,signal,body:JSON.stringify({user_id:userId,code_hash:await codeHash(code,userId,env.SUPABASE_SECRET_KEY!),token_hash:tokenHash,token_type:tokenType,expires_at:new Date(Date.now()+CODE_MINUTES*60000).toISOString(),attempts:0,created_at:new Date().toISOString()})});
+ if(!res.ok)throw new Error('Could not store the sign-in code.');
+ return code;
+}
+const signInUrl=(origin:string,email:string,code:string)=>`${origin}/sign-in?email=${encodeURIComponent(email)}&code=${code}`;
+/**
+ * A Bookkit-branded transactional email: wordmark, a short message, an
+ * optional one-time code and an optional button. Always plain HTML tables
+ * with inline styles (what mail clients render reliably) plus a plain-text
+ * twin.
+ */
+export function bookkitEmail(o:{preheader:string;lines:string[];code?:string;codeLead?:string;codeNote?:string;button?:{label:string;url:string};footnote:string;origin:string}):{html:string;text:string}{
+ const font="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif";
+ const p=(t:string)=>`<p style="margin:0 0 14px;font:15px/1.55 ${font};color:#1d1c1a">${t}</p>`;
+ const code=o.code?`<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 10px"><tr><td style="background:#f4f2ee;border:1px solid #e7e4de;border-radius:10px;padding:14px 22px;font:600 30px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:6px;color:#1d1c1a">${esc(spacedCode(o.code))}</td></tr></table>`+(o.codeNote?`<p style="margin:0 0 18px;font:13px/1.5 ${font};color:#55514b">${o.codeNote}</p>`:''):'';
+ const button=o.button?`<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 18px"><tr><td style="background:#1d1c1a;border-radius:8px"><a href="${esc(o.button.url)}" style="display:inline-block;padding:11px 20px;font:600 14px ${font};color:#ffffff;text-decoration:none">${esc(o.button.label)}</a></td></tr></table>`:'';
+ const html=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Bookkit</title></head><body style="margin:0;padding:0;background:#f6f5f2">`
+  +`<div style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(o.preheader)}</div>`
+  +`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f5f2"><tr><td align="center" style="padding:32px 16px">`
+  +`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px">`
+  +`<tr><td style="padding:0 4px 18px"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:30px;height:30px;background:#1d1c1a;border-radius:8px;text-align:center;vertical-align:middle;font:italic 700 20px/30px Georgia,'Times New Roman',serif;color:#ffffff">b</td><td style="padding-left:9px;font:600 18px ${font};color:#1d1c1a;letter-spacing:-0.2px">bookkit</td></tr></table></td></tr>`
+  +`<tr><td style="background:#ffffff;border:1px solid #e7e4de;border-radius:14px;padding:28px 28px 14px">${o.lines.map(p).join('')}${button}${o.codeLead?p(o.codeLead):''}${code}</td></tr>`
+  +`<tr><td style="padding:16px 4px 0;font:12px/1.5 ${font};color:#8a857d">${o.footnote}<br><a href="${esc(o.origin)}" style="color:#8a857d">${esc(new URL(o.origin).host)}</a> · Write your book.</td></tr>`
+  +`</table></td></tr></table></body></html>`;
+ const strip=(t:string)=>t.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+ const text=[...o.lines.map(strip),o.button?`${o.button.label}: ${o.button.url}`:'',o.codeLead?strip(o.codeLead):'',o.code?spacedCode(o.code):'',o.codeNote?strip(o.codeNote):'','—',strip(o.footnote),new URL(o.origin).host].filter(Boolean).join('\n\n');
+ return {html,text};
+}
+
+/**
+ * A one-time sign-in link for an invited collaborator, for the owner to send
+ * themselves. Nothing is emailed. Only the book's owner can create one, and
+ * only for an email they have invited to that book.
+ */
+async function inviteLink(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.SUPABASE_SECRET_KEY)return json({error:'Invitation links are not configured on this server.'},503);
+ const authorization=request.headers.get('Authorization')??'';if(!/^Bearer \S+$/.test(authorization))return json({error:'Sign in first.'},401);
+ const signal=AbortSignal.timeout(20000);
+ const headers={apikey:env.SUPABASE_PUBLISHABLE_KEY,Authorization:authorization,'Content-Type':'application/json'};
+ const who=await fetch(env.SUPABASE_URL+'/auth/v1/user',{headers,signal});if(!who.ok)return json({error:'Your session expired. Sign in again.'},401);
+ const user:any=await who.json();
+ const body:any=await limitedBody(request).catch(()=>null);
+ const projectId=String(body?.projectId??''),libraryId=String(body?.libraryId??''),email=String(body?.email??'').trim().toLowerCase();
+ const forLibrary=/^[a-f0-9-]{36}$/i.test(libraryId);
+ if((!forLibrary&&!/^[a-f0-9-]{36}$/i.test(projectId))||!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'A book or library and a valid email are required.'},400);
+ let library:any=null;
+ if(forLibrary){
+  const role=await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/library_role`,{method:'POST',headers,signal,body:JSON.stringify({p_library:libraryId})}).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(role!=='owner')return json({error:'Only the library’s owner can send invitations.'},403);
+  library=(await fetch(`${env.SUPABASE_URL}/rest/v1/libraries?select=id,slug,name,owner_email&id=eq.${libraryId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]))?.[0];
+  const invited=await fetch(`${env.SUPABASE_URL}/rest/v1/library_invitations?select=id&library_id=eq.${libraryId}&email=eq.${encodeURIComponent(email)}`,{headers,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+  if(!library||(!invited.length&&library.owner_email!==email))return json({error:'Add this email to the library first.'},404);
+ }else{
+  const owned=await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=id&id=eq.${projectId}&owner_id=eq.${user.id}`,{headers,signal});
+  if(!owned.ok||!(await owned.json()).length)return json({error:'Only the book’s owner can create invitation links.'},403);
+  const invited=await fetch(`${env.SUPABASE_URL}/rest/v1/project_invitations?select=id&project_id=eq.${projectId}&email=eq.${encodeURIComponent(email)}`,{headers,signal});
+  if(!invited.ok||!(await invited.json()).length)return json({error:'Invite this email to the book first.'},404);
+ }
+ const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+ const generate=(type:string)=>fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type,email,redirect_to:url.origin+'/'}),signal});
+ let res=await generate('invite');
+ if(!res.ok)res=await generate('magiclink');
+ const data:any=await res.json().catch(()=>null);
+ const link=data?.action_link??data?.properties?.action_link;
+ if(!res.ok||typeof link!=='string')return json({error:'Could not create a sign-in link. Try again.'},502);
+ if(body?.send!==true)return json({link});
+ if(!env.EMAIL)return json({error:'Email sending is not configured on this server. Copy the link instead.',link},503);
+ const book=forLibrary?[]:await fetch(`${env.SUPABASE_URL}/rest/v1/projects?select=name&id=eq.${projectId}`,{headers,signal}).then(r=>r.json()).catch(()=>[]);
+ const title=String(forLibrary?library.name:book?.[0]?.name??'a book').slice(0,200);
+ const home=forLibrary&&/\.bookkit\.net$/.test(url.hostname)?`https://${library.slug}.bookkit.net`:url.origin;
+ const owning=forLibrary&&library.owner_email===email;
+ const inviter=String(user?.user_metadata?.display_name||user?.email||'The author').slice(0,120);
+ const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
+ const invitee=data?.id??data?.user?.id;
+ const tokenType=(data?.verification_type??data?.properties?.verification_type)==='invite'?'invite':'magiclink';
+ const code=typeof tokenHash==='string'&&typeof invitee==='string'?await issueCode(env,invitee,tokenHash,tokenType,signal).catch(()=>null):null;
+ const hasCode=!!code;
+ const mail=bookkitEmail({
+  origin:url.origin,
+  preheader:`${inviter} invited you to work on ${title}.`,
+  lines:[owning?`<strong>${esc(inviter)}</strong> set up <strong>${esc(title)}</strong> for you on Bookkit: your own place for your books, at ${esc(home.replace(/^https?:\/\//,''))}.`:`<strong>${esc(inviter)}</strong> invited you to ${forLibrary?'join':'work on'} <strong>${esc(title)}</strong> in Bookkit.`],
+  button:{label:forLibrary?'Open the library':'Open the book',url:hasCode?signInUrl(home,email,code!):link},
+  codeLead:hasCode?`Or go to ${esc(home.replace(/^https?:\/\//,''))}, choose <em>I have a code</em>, and enter this email address with the code:`:undefined,
+  code:hasCode?code!:undefined,
+  codeNote:hasCode?`The button and the code work once and expire after ${CODE_MINUTES} minutes. If they expire, use <em>Email me a sign-in code</em> on the sign-in page.`:undefined,
+  footnote:'You can set a password later from the account menu. If you weren’t expecting this invitation, you can ignore it.',
+ });
+ const sent=await env.EMAIL.send({
+  to:email,
+  from:{email:'noreply@bookkit.net',name:'Bookkit'},
+  replyTo:user?.email,
+  subject:owning?`${inviter} set up ${title} for you on Bookkit`:`${inviter} invited you to “${title}” on Bookkit`,
+  text:mail.text,html:mail.html,
+ });
+ return json({sent:true,messageId:sent?.messageId??null});
+}
+
+/**
+ * "Email me a sign-in code" for existing accounts and invited collaborators or
+ * library owners, sent by Bookkit. The answer never reveals whether an account
+ * exists, unknown addresses never create an account, and each account gets at
+ * most one code a minute. The email has the 6-digit code and a link that
+ * carries the same code.
+ */
+async function signInCode(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.SUPABASE_SECRET_KEY||!env.EMAIL)return json({error:'Email sign-in is not available. Use your password.'},503);
+ const body:any=await limitedBody(request).catch(()=>null);
+ const email=String(body?.email??'').trim().toLowerCase();
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'Enter a valid email.'},400);
+ const done=json({ok:true});
+ const signal=AbortSignal.timeout(20000);
+ const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+ const enc=encodeURIComponent(email);
+ const found:any=await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&email=eq.${enc}`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ let id=found?.[0]?.id;
+ const generate=(type:string)=>fetch(env.SUPABASE_URL+'/auth/v1/admin/generate_link',{method:'POST',headers:admin,body:JSON.stringify({type,email,redirect_to:url.origin+'/'}),signal});
+ let res:Response;
+ if(id){
+  const user:any=await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{headers:admin,signal}).then(r=>r.ok?r.json():null).catch(()=>null);
+  if(!user)return done;
+  const last=Number(user.app_metadata?.bookkit_link_sent_at??0);
+  if(Date.now()-last<60000)return done;
+  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{...user.app_metadata,bookkit_link_sent_at:Date.now()}}),signal});
+  res=await generate('magiclink');
+  if(!res.ok)res=await generate('invite');
+ }else{
+  const hasRow=(table:string,col:string)=>fetch(`${env.SUPABASE_URL}/rest/v1/${table}?select=id&${col}=eq.${enc}&limit=1`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).then((rows:any)=>Array.isArray(rows)&&rows.length>0).catch(()=>false);
+  const invited=(await Promise.all([hasRow('libraries','owner_email'),hasRow('library_invitations','email'),hasRow('project_invitations','email')])).some(Boolean);
+  if(!invited)return done;
+  res=await generate('invite');
+  if(!res.ok)res=await generate('magiclink');
+ }
+ const data:any=await res.json().catch(()=>null);
+ id=id??data?.id??data?.user?.id;
+ const tokenHash=data?.hashed_token??data?.properties?.hashed_token;
+ const tokenType=(data?.verification_type??data?.properties?.verification_type)==='invite'?'invite':'magiclink';
+ if(!res.ok||typeof id!=='string'||typeof tokenHash!=='string')return done;
+ if(!found?.[0]?.id){
+  await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${id}`,{method:'PUT',headers:admin,body:JSON.stringify({app_metadata:{bookkit_link_sent_at:Date.now()}}),signal}).catch(()=>null);
+ }
+ const code=await issueCode(env,id,tokenHash,tokenType,signal);
+ const mail=bookkitEmail({
+  origin:url.origin,
+  preheader:`Your code is ${spacedCode(code)}. It expires in ${CODE_MINUTES} minutes.`,
+  lines:['Here’s your code for signing in to Bookkit:'],
+  code,
+  codeNote:`Type it on the sign-in screen, or use the button below. It works once and expires in ${CODE_MINUTES} minutes.`,
+  button:{label:'Sign in to Bookkit',url:signInUrl(url.origin,email,code)},
+  footnote:'You’re getting this because someone asked to sign in to Bookkit with this email address. If it wasn’t you, ignore this email; nobody can sign in without the code. Forgot your password? After signing in, choose Set password in the account menu.',
+ });
+ await env.EMAIL.send({
+  to:email,
+  from:{email:'noreply@bookkit.net',name:'Bookkit'},
+  subject:`Your Bookkit code: ${spacedCode(code)}`,
+  text:mail.text,html:mail.html,
+ }).catch(()=>null);
+ return done;
+}
+
+/**
+ * Exchange a Bookkit sign-in code for a session. Wrong codes count against
+ * the code (5 tries), and an expired or used code is gone.
+ */
+async function signInVerify(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.SUPABASE_SECRET_KEY)return json({error:'Code sign-in is not available. Use your password.'},503);
+ const body:any=await limitedBody(request).catch(()=>null);
+ const email=String(body?.email??'').trim().toLowerCase();
+ const code=String(body?.code??'').replace(/\D/g,'');
+ const wrong=json({error:'That code is wrong or has expired. Check the latest email, or send a new code.'},400);
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||code.length!==6)return wrong;
+ const signal=AbortSignal.timeout(20000);
+ const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+ const found:any=await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&email=eq.${encodeURIComponent(email)}`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const id=found?.[0]?.id;if(!id)return wrong;
+ const rows:any=await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}&select=*`,{headers:admin,signal}).then(r=>r.ok?r.json():[]).catch(()=>[]);
+ const row=rows?.[0];if(!row)return wrong;
+ const remove=()=>fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}`,{method:'DELETE',headers:admin,signal});
+ if(Date.parse(row.expires_at)<Date.now()||row.attempts>=CODE_TRIES){await remove();return wrong;}
+ if(await codeHash(code,id,env.SUPABASE_SECRET_KEY)!==row.code_hash){
+  await fetch(`${env.SUPABASE_URL}/rest/v1/bookkit_sign_in_codes?user_id=eq.${id}`,{method:'PATCH',headers:admin,signal,body:JSON.stringify({attempts:row.attempts+1})});
+  return wrong;
+ }
+ await remove();
+ const res=await fetch(`${env.SUPABASE_URL}/auth/v1/verify`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({type:row.token_type,token_hash:row.token_hash})});
+ const session:any=await res.json().catch(()=>null);
+ if(!res.ok||!session?.access_token||!session?.refresh_token)return wrong;
+ return json({access_token:session.access_token,refresh_token:session.refresh_token});
+}
+
+/**
+ * Free subscription sign-up for Bookkit. Creates a confirmed user account with
+ * free early-access subscription metadata and returns a live Supabase session
+ * so the client can immediately create their Library and Shelves.
+ */
+async function signUpAccount(request:Request,env:Env,url:URL):Promise<Response>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ const body:any=await limitedBody(request).catch(()=>null);
+ const email=String(body?.email??'').trim().toLowerCase();
+ const password=String(body?.password??'');
+ const displayName=String(body?.displayName??'').trim().slice(0,80)||email.split('@')[0];
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)||email.length>254)return json({error:'Enter a valid email address.'},400);
+ if(password.length<10||password.length>256)return json({error:'Use a password of at least 10 characters.'},400);
+ const signal=AbortSignal.timeout(20000);
+ const metadata={display_name:displayName,subscription_plan:'free_early_access',subscription_status:'active',subscribed_at:new Date().toISOString()};
+ if(env.SUPABASE_SECRET_KEY){
+  const admin={apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'};
+  const created=await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`,{method:'POST',headers:admin,signal,body:JSON.stringify({email,password,email_confirm:true,user_metadata:metadata})});
+  if(!created.ok){
+   const err:any=await created.json().catch(()=>null);
+   const msg=String(err?.msg||err?.message||err?.error_description||'Could not create account.');
+   if(/already|registered|exists|duplicate/i.test(msg))return json({error:'An account with this email already exists. Sign in instead.'},409);
+   return json({error:msg},400);
+  }
+  const tokenRes=await fetch(`${env.SUPABASE_URL}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({email,password})});
+  const session:any=await tokenRes.json().catch(()=>null);
+  if(!tokenRes.ok||!session?.access_token||!session?.refresh_token)return json({error:'Account created. Please sign in with your email and password.'},201);
+  return json({access_token:session.access_token,refresh_token:session.refresh_token,user:session.user});
+ }
+ const pub=await fetch(`${env.SUPABASE_URL}/auth/v1/signup`,{method:'POST',headers:{apikey:env.SUPABASE_PUBLISHABLE_KEY,'Content-Type':'application/json'},signal,body:JSON.stringify({email,password,data:metadata})});
+ const data:any=await pub.json().catch(()=>null);
+ if(!pub.ok){
+  const msg=String(data?.msg||data?.message||data?.error_description||'Could not create account.');
+  if(/already|registered|exists|duplicate/i.test(msg))return json({error:'An account with this email already exists. Sign in instead.'},409);
+  return json({error:msg},400);
+ }
+ return json({access_token:data?.access_token??data?.session?.access_token??null,refresh_token:data?.refresh_token??data?.session?.refresh_token??null,user:data?.user??null});
+}
+
+
+// ---------- voice: dictation and reading aloud (Workers AI) ----------
+
+export const TRANSCRIBE_MODEL='@cf/openai/whisper-large-v3-turbo';
+export const SPEAK_MODEL='@cf/deepgram/aura-2-en';
+export const POLISH_MODEL='@cf/openai/gpt-oss-120b';
+export const VOICES=['thalia','andromeda','helena','luna','athena','apollo','arcas','orion','hermes','zeus'];
+
+async function readJson(request:Request,max:number):Promise<any>{
+ const reader=request.body?.getReader();if(!reader)throw new Error('Request body required.');const chunks:Uint8Array[]=[];let total=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.length;if(total>max){await reader.cancel();throw new Error('too large');}chunks.push(value);}}finally{reader.releaseLock();}
+ const bytes=new Uint8Array(total);let o=0;for(const c of chunks){bytes.set(c,o);o+=c.length;}return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+/** Signed in, same origin, and allowed to read the book. Returns an error response or the auth headers. */
+async function voiceAccess(request:Request,env:Env,url:URL,projectId:string,signal:AbortSignal):Promise<Response|Record<string,string>>{
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ if(!env.AI)return json({error:'Voice is not configured on this server.'},503);
+ const authorization=request.headers.get('Authorization')??'';if(!/^Bearer \S+$/.test(authorization))return json({error:'Sign in to use voice.'},401);
+ if(!/^[a-f0-9-]{36}$/i.test(projectId))return json({error:'Open a book first.'},400);
+ const headers={apikey:env.SUPABASE_PUBLISHABLE_KEY,Authorization:authorization,'Content-Type':'application/json'};
+ const access=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/has_project_access',{method:'POST',headers,body:JSON.stringify({p_project_id:projectId,p_min_role:'viewer'}),signal});
+ if(!access.ok||await access.json()!==true)return json({error:'You can’t open this book.'},403);
+ return headers;
+}
+
+async function transcribe(request:Request,env:Env,url:URL):Promise<Response>{
+ const signal=AbortSignal.timeout(110000);
+ let body:any;try{body=await readJson(request,12*1024*1024);}catch{return json({error:'Record up to two minutes at a time.'},413);}
+ const allowed=await voiceAccess(request,env,url,String(body?.projectId??''),signal);if(allowed instanceof Response)return allowed;
+ const audio=String(body?.audio??'');
+ if(!audio||audio.length<200||!/^[A-Za-z0-9+/=]+$/.test(audio.slice(0,200)))return json({error:'No audio received.'},400);
+ const vocabulary=voiceVocabulary((Array.isArray(body?.vocabulary)?body.vocabulary:[]).map(String).slice(0,200));
+ const before=String(body?.context??'').replace(/\s+/g,' ').slice(-300);
+ const base={audio,task:'transcribe',language:'en',vad_filter:true,condition_on_previous_text:false};
+ // Without any prompt Whisper drops punctuation and capitals; a neutral sentence keeps them without steering words.
+ const NEUTRAL='Here is the next passage of the chapter, as the author dictates it.';
+ const prompt=[vocabulary.length?`Names: ${vocabulary.join(', ')}.`:'',before].filter(Boolean).join(' ').slice(0,900);
+ const [plain,biased]=await Promise.all([
+  env.AI!.run(TRANSCRIBE_MODEL,{...base,initial_prompt:before?`${NEUTRAL} ${before}`.slice(0,900):NEUTRAL}),
+  prompt?env.AI!.run(TRANSCRIBE_MODEL,{...base,initial_prompt:prompt}):Promise.resolve(null),
+ ]).catch(()=>[null,null]);
+ const original=String(plain?.text??'').trim();
+ if(!original)return json({error:'No speech was recognised. Try again a little closer to the microphone.'},422);
+ let text=biased?.text?correctVoiceTerms(original,String(biased.text).trim(),vocabulary):original;
+ const corrected=text!==original;
+ text=applySpokenCommands(text);
+ let polished=false;
+ if(body?.polish!==false&&text.length<6000){
+  try{
+   const maxTokens=Math.min(2048,Math.max(256,Math.ceil(text.length/2)+128));
+   const out=await env.AI!.run(POLISH_MODEL,{messages:[
+    {role:'system',content:'You fix the punctuation of a passage a novelist dictated. Fix only punctuation and capital letters. Preserve existing line and paragraph breaks exactly; never add new paragraph breaks. Do not change, add, remove, reorder or correct any word, including grammar or spelling. Dialogue gets quotation marks. Return only the passage.'},
+    {role:'user',content:text}],max_tokens:maxTokens,temperature:0,reasoning_effort:'low'});
+   const raw=out?.choices?.[0]?.message?.content??out?.response??'';
+   let candidate=String(raw).replace(/^\s*<think>[\s\S]*?<\/think>\s*/,'').trim();
+   if(!/\n{2,}/.test(text)&&/\n{2,}/.test(candidate))candidate=candidate.replace(/\s*\n{2,}\s*/g,' ');
+   if(candidate&&onlyPunctuationChanged(text,candidate)){text=candidate;polished=true;}
+  }catch{/* keep the unpolished text */}
+ }
+ text=applyHouseStyle(text,body?.style&&typeof body.style==='object'?body.style:{});
+ return json({original,text,corrected,polished});
+}
+
+async function speak(request:Request,env:Env,url:URL,ctx?:{waitUntil:(p:Promise<unknown>)=>void}):Promise<Response>{
+ const signal=AbortSignal.timeout(60000);
+ let body:any;try{body=await readJson(request,16*1024);}catch{return json({error:'Too much text at once.'},413);}
+ const allowed=await voiceAccess(request,env,url,String(body?.projectId??''),signal);if(allowed instanceof Response)return allowed;
+ const text=String(body?.text??'').trim();
+ if(!text||text.length>2400)return json({error:'Read up to 2,400 characters at a time.'},400);
+ const voice=VOICES.includes(body?.voice)?body.voice:VOICES[0];
+ const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`${SPEAK_MODEL}|${voice}|${text}`)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const key=new Request(`${url.origin}/__voice/${digest}.mp3`);
+ const cache=(globalThis as any).caches?.default as Cache|undefined;
+ const hit=await cache?.match(key);
+ if(hit)return new Response(hit.body,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'private, max-age=86400','X-Voice-Cache':'hit'}});
+ const result=await env.AI!.run(SPEAK_MODEL,{text,speaker:voice,encoding:'mp3'});
+ const bytes=result instanceof ReadableStream?await new Response(result).arrayBuffer():result instanceof ArrayBuffer?result:result?.audio?Uint8Array.from(atob(result.audio),c=>c.charCodeAt(0)).buffer:null;
+ if(!bytes||bytes.byteLength<100)return json({error:'The voice didn’t answer. Try again.'},502);
+ if(cache){const put=cache.put(key,new Response(bytes,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'public, max-age=2592000'}}));if(ctx)ctx.waitUntil(put);else await put;}
+ return new Response(bytes,{headers:{'Content-Type':'audio/mpeg','Cache-Control':'private, max-age=86400','X-Voice-Cache':'miss'}});
+}
+
+export default {async fetch(request:Request,env:Env,ctx?:{waitUntil:(p:Promise<unknown>)=>void}):Promise<Response>{
+ const url=new URL(request.url);
+ // www.bookkit.net is the same site: send it to bookkit.net, keeping the path.
+ if(url.hostname==='www.bookkit.net'){url.hostname='bookkit.net';return Response.redirect(url.toString(),301);}
+ if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
+ if(url.pathname==='/api/sign-in-code'||url.pathname==='/api/sign-in-link')return signInCode(request,env,url).catch(()=>json({ok:true}));
+ if(url.pathname==='/api/voice/transcribe')return transcribe(request,env,url).catch(()=>json({error:'Transcription failed. Try again.'},502));
+ if(url.pathname==='/api/voice/speak')return speak(request,env,url,ctx).catch(()=>json({error:'Reading aloud failed. Try again.'},502));
+ if(url.pathname==='/api/sign-in-verify')return signInVerify(request,env,url).catch(()=>json({error:'Could not sign in with that code. Try again.'},502));
+ if(url.pathname==='/api/signup')return signUpAccount(request,env,url).catch(()=>json({error:'Could not create your account. Try again.'},502));
+ if(url.pathname==='/api/invite-link')return inviteLink(request,env,url).catch(()=>json({error:'Could not create a sign-in link. Try again.'},502));
+ if(url.pathname!=='/api/ai')return json({error:'Not found'},404);
+ if(request.method!=='POST')return json({error:'POST required'},405);
+ const origin=request.headers.get('Origin');if(origin&&origin!==url.origin)return json({error:'Cross-origin request denied'},403);
+ const authorization=request.headers.get('Authorization')??'';if(!/^Bearer \S+$/.test(authorization))return json({error:'Sign in to use editorial assistance.'},401);
+ const signal=AbortSignal.timeout(90000);
+ try{
+  const headers={apikey:env.SUPABASE_PUBLISHABLE_KEY,Authorization:authorization,'Content-Type':'application/json'};
+  const auth=await fetch(env.SUPABASE_URL+'/auth/v1/user',{headers,signal});if(!auth.ok)return json({error:'Your session expired. Sign in again.'},401);
+  const body=await limitedBody(request);
+  if(!['anthropic','openai','bookkit'].includes(body.provider)||!['models','complete'].includes(body.action))return json({error:'Unsupported AI operation.'},400);
+  if(body.provider==='bookkit')return included(body,env,headers,signal);
+  const key=request.headers.get('X-Provider-Key')??'';if(!key||key.length>512)return json({error:'Add your provider API key in API Settings.'},400);
+  const providerHeaders:Record<string,string>=body.provider==='anthropic'?{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'}:{'Content-Type':'application/json',Authorization:'Bearer '+key};
+  const base=body.provider==='anthropic'?'https://api.anthropic.com/v1':'https://api.openai.com/v1';
+  let upstream:Response;
+  if(body.action==='models')upstream=await fetch(base+'/models',{headers:providerHeaders,signal});
+  else{
+   if(typeof body.model!=='string'||!body.model||body.model.length>160)return json({error:'Choose an available model in API Settings.'},400);
+   const rejected=await checkRequest(body,headers,env,signal,AI_PROMPT_LIMIT);if(rejected)return rejected;
+   const policy=await bookPolicy(body,headers,env,signal);
+   const max=body.mode==='companion'?16384:4096;
+   const payload=body.provider==='anthropic'?{model:body.model,max_tokens:max,system:policy,messages:[{role:'user',content:body.prompt}]}:{model:body.model,max_completion_tokens:max,messages:[{role:'system',content:policy},{role:'user',content:body.prompt}]};
+   upstream=await fetch(base+(body.provider==='anthropic'?'/messages':'/chat/completions'),{method:'POST',headers:providerHeaders,body:JSON.stringify(payload),signal});
+  }
+  const data:any=await upstream.json().catch(()=>null);
+  if(!upstream.ok){const message=String(data?.error?.message??'Provider request failed ('+upstream.status+').').replaceAll(key,'[redacted]');return json({error:message},upstream.status===429?429:502);}
+  if(body.action==='models')return json({models:(Array.isArray(data?.data)?data.data:[]).filter((m:any)=>body.provider==='anthropic'||/^(gpt-|o[1-9]|chatgpt-)/.test(m.id)&&!/(audio|realtime|transcribe|tts|image|search|embedding)/.test(m.id)).map((m:any)=>({id:String(m.id),label:String(m.display_name??m.id)}))});
+  const reason=body.provider==='anthropic'?data?.stop_reason:data?.choices?.[0]?.finish_reason;
+  if(reason!==(body.provider==='anthropic'?'end_turn':'stop'))return json({error:'The provider did not finish a complete response. No proposal was applied. Use a smaller document or narrower request.'},422);
+  const text=body.provider==='anthropic'?(data.content??[]).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join('\n'):data.choices?.[0]?.message?.content;
+  if(typeof text!=='string'||!text.trim())return json({error:'The provider returned no usable text.'},422);
+  return json({text});
+ }catch(e){return json({error:e instanceof Error&&['TimeoutError','AbortError'].includes(e.name)?'The provider timed out. Try a narrower request.':e instanceof SyntaxError?'Invalid request body.':'Unable to complete the request. Please try again.'},502);}
+}};

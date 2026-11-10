@@ -4,7 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Writer is a manuscript writing desktop app built with Tauri v2 + React + TypeScript. It runs as a native app via Tauri or in the browser during development (with a Vite dev-fs middleware simulating filesystem access).
+Bookkit (bookkit.net) is a collaborative book-writing app built with React + TypeScript + Supabase, served by a Cloudflare Worker (`wrangler.jsonc`, `worker/index.ts`). It can also run as a Tauri v2 desktop app.
+
+## The Studio (current UI)
+
+Every book is stored as Bookkit files (`book.yaml`, `manuscript/`, `draft/`, `bible/`, `outline/`, `craft/`, `research/`) in `bookkit_documents`, but the UI never shows files. `src/components/studio/` presents one linked workspace:
+
+- `Studio.tsx` — shell: top bar (book switcher, menu bar Manuscript / Plan / Bible / Craft / Research / Inspiration with a dropdown of each section's pages, ⌘K jump palette, sharing, account), entity hover cards, link navigation, new book/chapter dialogs, and `useUrlSync` (address bar ⇄ store, back/forward).
+- `src/lib/book-url.ts` — readable URLs: `/<book>/chapter/2`, `/<book>/bible/characters/nora`, `/<book>/outline/chapters`, `/<book>/brief`… `go(path)` picks the view from the path (`viewForPath`): `bible/*` → Bible, `outline/*` and `@brief` → Plan, everything else → Write.
+- `Navigator.tsx` — contents for the current section only (`navScopeFor`): manuscript chapters and front/back matter; brief and chapter plans; bible pages with every entry listed; craft; research; book files.
+- Loading: `useBookStore` shows a book from memory/IndexedDB (`src/lib/local-cache.ts`) at once, then `revalidate()` downloads only changed documents (`refreshBookDocuments`).
+- `BiblePages.tsx` — bible pages named like characters/places/organizations/motifs (`entityKindForPath`) show as cards (`EntityIndex`); each `## Name` section opens as its own editable page (`EntityPage`, edits only that section via `src/lib/entity-section.ts`). "Whole page" shows the file as one document.
+- `ManuscriptView.tsx` — the whole manuscript as one continuous document; the chapter you click becomes a live editor, the rest render statically. Reference-draft chapters are read-only; "Write this chapter" starts the author's file (bookkit `start` semantics, never copying draft prose). While that file is still empty, "Go back to the reference draft" deletes it again (owner only, version-checked).
+- `CompanionView.tsx` — bible / plan / craft pages as rich documents.
+- `ContextPanel.tsx` — chapter plan + scene cards, mentioned bible entries, "referenced in", reference draft, comments and suggestions, AI assist.
+- `Boards.tsx` — Plan board (cards, or `PlanList.tsx` list with drag-to-reorder via `src/lib/reorder.ts`) and Bible board (entity cards with kind filters).
+- `ChapterPlanPage.tsx` — Plan › one chapter (URL `/<book>/chapter/N/plan`): the chapter's section of `outline/chapters.md` (`src/lib/chapter-outline.ts`) and its scene cards, both editable. `SceneBoard.tsx` (`SceneCards`) — a chapter's scene cards (`outline/scenes/NN-*.md`) as editable cards (click a field to edit, one row per beat, add/move/delete); `src/lib/scene-cards.ts` rewrites only the edited scene. The manuscript shows a compact scene strip under each chapter heading.
+- Chapter anchors (`*Ch. 3, Scene 4*: “words”`) sit at the end of each fact in one parenthesis; `src/lib/anchors.ts` parses, checks (chapter, scene, quoted words) and writes them. `src/lib/markup-chips.ts` (TipTap plugin) shows anchors, footnotes (`[^1]`) and Pandoc citations (`[@key, loc]`) as chips, raw text in the line the caret is in; `ChipPopover.tsx` edits them; `src/lib/static-chips.ts` does the same for read-only HTML.
+- Tables in companion pages are edited as records (`TableEditor.tsx` via the `rawBlock` node view, `src/lib/md-table.ts`): key/value for two columns (style sheet), anchor and label columns, cards for wide ledgers; rows written back byte-for-byte when untouched.
+- `SourcesPage.tsx` (`/<book>/sources`, location `@sources`) edits the CSL-YAML bibliography (`citations.bibliography` in book.yaml, default `research/bibliography.yaml`) and the `research/bib/*.yaml` fragments it is merged from (`src/lib/bibliography.ts`).
+- `TimelinePage.tsx` — `bible/*timeline*.md` (`## Period` sections with When/What/Anchor tables, `src/lib/timeline.ts`) as a vertical timeline; add/edit/move events and periods.
+- `src/components/Workspace.tsx` — the home page at `/`: your books and books shared with you, progress, last worked on, a 12-week activity calendar and per-book sparklines, from the `bookkit_workspace()` RPC and `bookkit_daily_activity` (written by a trigger on `bookkit_documents`).
+- `BriefPage.tsx` — logline, genre, readers, comparable titles, themes, target length (location `@brief`); the Inspiration view reuses `Inspiration.tsx`.
+- `useDocSession.ts` — load, autosave (900 ms), three-way merge, suggestions for non-owners, IndexedDB draft backup, live remote updates.
+
+- `Workspace.tsx` / `LibrarySettings.tsx` — libraries on their own subdomains (dom.bookkit.net): bookkit.net lists every library you can open; a library's home shows its shelves (drag books between them), and settings cover details, shelves (with a house style each) and people (reader / editor / co-author). `src/lib/library-host.ts` reads the library from the hostname; the Supabase session lives in a cookie on `.bookkit.net` (`src/lib/cookie-storage.ts`) so one sign-in covers every subdomain. Access: `library_role()` / `has_library_access()`; `has_project_access()` grants library roles on non-private books.
+- `BookConfiguration.tsx` — the book's configuration page: identity (kind, byline), AI policy (texts generated from bookkit/policies by `scripts/sync-bookkit-policies.mjs`; block sync in `src/lib/policy-blocks.ts` is byte-identical to `bin/policy --sync`), house style (own or the shelf's, `src/lib/book-config.ts`), publishing.
+- Voice — `Dictation.tsx` (toolbar mic → `/api/voice/transcribe`: Whisper twice, name fixes only via `correctVoiceTerms`, punctuation tidy accepted only if no word changed) and `useListenStore` + `ListenBar.tsx` (`/api/voice/speak`, Aura-2, cached, lock-screen controls). Text rules in `src/lib/voice-text.ts`.
+- Scene cards sit at the top of each scene in the chapter (`SceneCardInline.tsx`, `SceneSlots` in `editor-extensions.ts`): scenes start after `***` breaks, or at `## Scene N` headings in books with `manuscript.scenes: true`.
+
+Key libraries: `src/lib/markdown-doc.ts` converts Markdown ⇄ editor and writes untouched blocks back byte-for-byte; `src/lib/book-model.ts` derives chapters, entities (from `## Name` sections), chapter anchors (`*Ch. 9*`) and mentions; `src/lib/editor-extensions.ts` holds the TipTap schema and the link/comment decorations; `src/store/useBookStore.ts` holds book files, navigation and realtime.
+
+Projects without `bookkit_slug` still open in the legacy tabbed UI (`Layout.tsx` → `LegacyLayout`). New books are always created as Bookkit books (`createBook` in `supabase-service.ts`).
 
 ## Commands
 
@@ -16,45 +47,75 @@ Writer is a manuscript writing desktop app built with Tauri v2 + React + TypeScr
 
 ## Architecture
 
-### Dual Runtime (Tauri vs Browser Dev)
+### Storage: Supabase
 
-The app runs in two modes with a unified filesystem abstraction:
+All project data is stored in a local Supabase instance (PostgreSQL). The Supabase client is configured in `src/lib/supabase-client.ts` and defaults to `http://127.0.0.1:54321`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` env vars to override.
 
-- **Tauri**: uses `@tauri-apps/plugin-fs` and `@tauri-apps/plugin-shell` for real filesystem and git operations
-- **Browser dev**: uses a custom Vite plugin (`vite-plugin-fs.ts`) that exposes `/__fs/*` HTTP endpoints, proxying to Node's `fs` module. All paths are sandboxed to `~/Documents/Writer/`.
+`src/lib/supabase-service.ts` is the storage abstraction layer — every read/write goes through it. Never call the Supabase client directly from components; always go through `supabase-service.ts`.
 
-`src/lib/fs-backend.ts` is the abstraction layer — every filesystem call routes through it. Never import Tauri plugins directly in components; always go through `fs-backend.ts` or `fs-service.ts`.
+> **Legacy files**: `src/lib/fs-backend.ts` and `src/lib/fs-service.ts` still exist but are dead code — no app component imports them. They remain only as a reference for the old on-disk format.
 
-### On-Disk Project Format
+### Supabase Schema
 
-Projects live under `~/Documents/Writer/<project-slug>/` with this structure:
-- `chapters/` — markdown files named `NN-slug.md` (e.g., `01-the-beginning.md`), each with an H1 heading
-- `.writer/project.json` — brief metadata, act definitions, per-chapter metadata (scenes, status, dials, notes)
-- `.writer/characters.json`, `threads.json`, `locations.json`, `codex.json` — story bible data
-- `.writer/settings.json` — LLM provider config
-- `.writer/comments.json`, `export-config.json`, `inspiration.json` — auxiliary data
-- `prewriting/` — treatment, story-bible, outline markdown files
-- `style-rules.md` — prose style guide
-- `inspiration/` — reference files (images, PDFs, etc.)
+The schema is defined in `supabase/migrations/`. Key tables:
 
-Chapter content is stored as markdown on disk but converted to HTML (via TipTap) in memory. `fs-service.ts` handles the read/write round-trip including markdown-to-HTML and HTML-to-markdown conversion.
+- `projects` — project metadata plus flattened brief fields (`brief_title`, `brief_genre`, etc.)
+- `project_members` — collaboration membership with `project_role` enum (`owner`, `editor`, `viewer`)
+- `acts`, `chapters`, `scenes` — manuscript structure, ordered by `sort_order`
+- `characters`, `character_relationships`, `threads`, `locations`, `codex_entries` — story bible
+- `comments`, `comment_replies` — per-chapter commenting with resolve support
+- `snapshots`, `snapshot_chapters` — point-in-time chapter snapshots (replaces git versioning)
+- `project_settings`, `export_configs`, `llm_settings` — per-project configuration
+- `inspiration_items` — metadata; actual files live in the `inspiration` Supabase Storage bucket
+- `profiles` — extends `auth.users`, auto-created via a trigger on signup
+
+Chapters store content as HTML (TipTap format) in the `content` column. Markdown conversion happens only on export/import via `src/lib/markdown.ts`.
+
+Chapters support optimistic locking with a `version` column for collaborative editing conflict detection.
+
+### Authentication
+
+Supabase Auth handles signup/signin with email + password. The flow:
+
+1. `LoginScreen` component (`src/components/LoginScreen.tsx`) collects credentials
+2. `signIn()` / `signUp()` in `supabase-service.ts` call `supabase.auth`
+3. The Zustand store tracks `isAuthenticated` and `userId`
+4. User config (last project, last tab) is stored in `localStorage`, not Supabase
+
+### Row-Level Security (RLS)
+
+Every table has RLS enabled (`supabase/migrations/00002_rls_policies.sql`). A helper function `has_project_access(project_id, min_role)` gates all access:
+
+- **owner**: full CRUD on the project and its members
+- **editor**: read/write on all project content (chapters, bible, settings, snapshots)
+- **viewer**: read-only on content, but can create comments and replies
+
+LLM settings (API keys) are restricted to `owner` access only.
+
+### Collaboration and Realtime
+
+- **Member management**: project owners can invite users by email with a role (`editor` or `viewer`) via the `Collaboration` component (`src/components/Collaboration.tsx`)
+- **Realtime presence**: `subscribeToProject()` opens a Supabase Realtime channel with presence tracking. Active editors see each other's display name, current tab, and chapter
+- **Realtime data sync**: postgres_changes subscriptions on `chapters` and `comments` tables push updates to all connected clients
+- **Presence broadcast**: `broadcastPresence()` sends the current user's cursor/tab state to the channel
 
 ### State Management
 
 Single Zustand store (`src/store/useProjectStore.ts`) holds all app state. Key patterns:
 - `updateCurrentProject()` helper for immutable project updates
-- Auto-save every 30s when dirty, plus Cmd+S manual save
-- `loadFromStorage()` reads from disk on boot; `saveToStorage()` writes everything back
-- Git snapshots via `src/lib/git.ts` — initializes a git repo in the project directory, commits on user action
+- **Immediate per-mutation saves**: each store action (e.g., updating a chapter, adding a character) fires a `void save*()` call to Supabase inline
+- **Safety-net full flush**: `saveToStorage()` writes the entire project to Supabase; called every 30s when dirty and on Cmd+S
+- `loadFromStorage()` reads from Supabase on boot (fetches project list, then loads the last-used project)
+- Snapshots via `supabase-service.ts` — replaces the old git-based versioning
 
 ### Key Types
 
 `src/types.ts` defines the entire data model: `Project`, `Chapter`, `Scene`, `Character`, `Thread`, `Location`, `CodexEntry`, `Brief`, `WritingDials`, `Comment`, etc. It also contains factory functions (`createDefault*`) and section-type formatting utilities.
 
-### UI Tabs
+### Legacy UI Tabs
 
-The app has six tabs (type `TabId`): brief, plan, bible, manuscript, inspiration, manage. Each maps to a component in `src/components/`.
+Legacy (non-Bookkit) projects use tabs (type `TabId`): brief, plan, bible, manuscript, inspiration, manage.
 
 ### LLM Integration
 
-`src/lib/llm-service.ts` calls Anthropic or OpenAI APIs directly from the frontend using API keys stored in project settings. No backend proxy.
+`src/lib/llm-service.ts` sends requests through the authenticated Worker route `/api/ai`, which checks book access and applies the human-authorship policy (`src/lib/ai-policy.ts`). Keys are entered per browser. AI never writes manuscript prose.

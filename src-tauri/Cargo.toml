@@ -1,12 +1,12 @@
 [package]
-name = "writer"
+name = "bookkit"
 version = "0.1.0"
 description = "A manuscript writing app"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "writer_lib"
+name = "bookkit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
